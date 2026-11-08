@@ -1,0 +1,9 @@
+# Carpetas locales que no van al repositorio
+.claude/
+docs/
+
+# Por seguridad: nunca subir claves ni dependencias
+.env
+.env.local
+.env*.local
+node_modules/

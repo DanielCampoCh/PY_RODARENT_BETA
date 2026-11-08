@@ -1,11 +1,12 @@
 import postgres from "postgres";
+import { limpiarDatabaseUrl } from "./database-url.mjs";
 
 type Sql = ReturnType<typeof postgres>;
 const g = globalThis as unknown as { __rrSql?: Sql };
 
 function connect(): Sql {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("Falta la variable DATABASE_URL");
+  const { url, error } = limpiarDatabaseUrl(process.env.DATABASE_URL);
+  if (!url) throw new Error(error);
   // prepare:false para funcionar con poolers en modo transacción (Supabase/Neon) desde funciones serverless.
   return postgres(url, { prepare: false, max: Number(process.env.DB_POOL_MAX) || 5, idle_timeout: 20, connect_timeout: 10, onnotice: () => {} });
 }

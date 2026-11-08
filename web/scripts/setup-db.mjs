@@ -4,12 +4,14 @@ import { config } from "dotenv";
 import postgres from "postgres";
 import { readFileSync } from "node:fs";
 import { scryptSync, randomBytes } from "node:crypto";
+import { limpiarDatabaseUrl } from "../lib/database-url.mjs";
 
 config({ path: ".env.local" });
 config();
 
-const url = process.env.DATABASE_URL;
-if (!url) { console.error("Falta DATABASE_URL (en .env.local)."); process.exit(1); }
+const { url, host, error } = limpiarDatabaseUrl(process.env.DATABASE_URL);
+if (!url) { console.error(error); process.exit(1); }
+console.log(`Base de datos: ${host}`);
 const sql = postgres(url, { prepare: false, max: 1, onnotice: () => {} });
 const reset = process.argv.includes("--reset");
 
