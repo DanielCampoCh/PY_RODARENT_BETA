@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Autos del Valle · Alquiler de vehículos</title>
+  <meta name="description" content="Alquiler de vehículos: catálogo, cotización y reserva en línea con asistente virtual." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+  <style>
+    .container { max-width: 1180px; margin: 0 auto; padding: 0 20px; }
+    .demo-bar { background: #101828; color: #d0d5dd; font-size: 12.5px; text-align: center; padding: 7px 16px; }
+    .demo-bar b { color: #fff; }
+    .demo-bar a { color: #fff; text-decoration: underline; text-underline-offset: 2px; }
+    header.top { position: sticky; top: 0; z-index: 50; background: rgba(255,255,255,.92); backdrop-filter: saturate(180%) blur(10px); border-bottom: 1px solid var(--border); }
+    .top-inner { display: flex; align-items: center; gap: 24px; height: 66px; }
+    .logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 17px; letter-spacing: -0.02em; }
+    .logo-mark { width: 34px; height: 34px; border-radius: 9px; background: var(--brand); color: #fff; display: grid; place-items: center; }
+    .logo-mark svg { width: 20px; height: 20px; }
+    .logo small { display: block; font-size: 11px; font-weight: 500; color: var(--text-3); letter-spacing: 0; margin-top: -2px; }
+    nav.links { display: flex; gap: 4px; margin-left: 8px; }
+    nav.links a { padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; color: var(--text-2); }
+    nav.links a:hover { background: var(--surface-2); color: var(--text); }
+    .top-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+    .hero { background: radial-gradient(1200px 400px at 85% -10%, #dfe6ff 0%, transparent 60%), linear-gradient(180deg, #fff 0%, var(--bg) 100%); padding: 56px 0 40px; }
+    .hero-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 48px; align-items: center; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--brand); background: var(--brand-50); padding: 5px 12px; border-radius: 999px; }
+    .hero h1 { font-size: 48px; font-weight: 800; letter-spacing: -0.035em; margin: 18px 0 14px; line-height: 1.05; }
+    .hero h1 span { color: var(--brand); }
+    .hero p.lead { font-size: 18px; color: var(--text-2); max-width: 520px; }
+    .trust { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 26px; font-size: 14px; color: var(--text-2); }
+    .trust span { display: inline-flex; gap: 7px; align-items: center; }
+    .trust svg { width: 18px; height: 18px; color: var(--ok); }
+    .hero-art { position: relative; }
+    .hero-art .stage { background: linear-gradient(160deg, #eef2ff, #e6ebf5); border-radius: 24px; padding: 40px 24px 28px; border: 1px solid var(--border); }
+    .hero-art .float { position: absolute; background: #fff; border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 10px 14px; font-size: 13px; display: flex; gap: 10px; align-items: center; }
+    .hero-art .f1 { top: -14px; left: -12px; }
+    .hero-art .f2 { bottom: -16px; right: -8px; }
+    .dot-ok { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-bg); color: var(--ok); }
+    .dot-ok svg { width: 17px; height: 17px; }
+
+    .search { margin-top: -6px; position: relative; z-index: 5; }
+    .search-card { display: grid; grid-template-columns: 1.3fr 1fr 1fr auto; gap: 12px; align-items: end; padding: 18px; background: #fff; border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
+
+    section.block { padding: 64px 0; }
+    .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; flex-wrap: wrap; }
+    .section-head h2 { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; }
+    .section-head p { color: var(--text-2); margin-top: 6px; }
+    .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip { border: 1px solid var(--border-strong); background: #fff; border-radius: 999px; padding: 7px 14px; font-size: 13px; font-weight: 600; color: var(--text-2); }
+    .chip.active { background: var(--text); border-color: var(--text); color: #fff; }
+    .avail-note { font-size: 13px; color: var(--text-2); margin-bottom: 16px; display: flex; gap: 8px; align-items: center; }
+    .avail-note svg { width: 16px; height: 16px; color: var(--brand); }
+
+    .grid-cars { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
+    .car { display: flex; flex-direction: column; transition: transform .2s ease, box-shadow .2s ease; }
+    .car:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+    .car .body { padding: 16px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+    .car .name { font-weight: 700; font-size: 16px; }
+    .car .foot { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 10px; border-top: 1px dashed var(--border); gap: 10px; }
+    .car.unavailable .car-art svg { opacity: .45; filter: grayscale(.7); }
+    .tag-hot { position: absolute; top: 12px; right: 12px; background: #101828; color: #fff; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
+
+    .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .step { padding: 22px; }
+    .step .num { width: 34px; height: 34px; border-radius: 10px; background: var(--brand-50); color: var(--brand); display: grid; place-items: center; font-weight: 800; margin-bottom: 14px; }
+    .step h3 { font-size: 16px; margin-bottom: 6px; }
+    .step p { font-size: 14px; color: var(--text-2); }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .req-list { list-style: none; padding: 0; margin: 0; }
+    .req-list li { display: flex; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+    .req-list li:last-child { border-bottom: none; }
+    .req-list .ic { width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; flex-shrink: 0; color: var(--text-2); }
+    .req-list .ic svg { width: 18px; height: 18px; }
+
+    details.faq { border-bottom: 1px solid var(--border); }
+    details.faq summary { list-style: none; cursor: pointer; padding: 16px 0; font-weight: 600; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    details.faq summary::-webkit-details-marker { display: none; }
+    details.faq summary::after { content: "+"; font-size: 20px; color: var(--text-3); transition: transform .2s; }
+    details.faq[open] summary::after { transform: rotate(45deg); }
+    details.faq p { padding: 0 0 16px; color: var(--text-2); font-size: 14px; }
+
+    .cta { background: #101828; color: #fff; border-radius: 24px; padding: 40px; display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; }
+    .cta h2 { font-size: 26px; letter-spacing: -0.02em; }
+    .cta p { color: #98a2b3; margin-top: 6px; }
+    footer { padding: 32px 0 100px; color: var(--text-3); font-size: 13px; }
+    footer .row { gap: 20px; }
+
+    /* Chat flotante */
+    .fab { position: fixed; right: 22px; bottom: 22px; z-index: 80; width: 60px; height: 60px; border-radius: 50%; background: var(--wa); color: #fff; border: 0; box-shadow: 0 10px 25px -5px rgba(37,211,102,.55); display: grid; place-items: center; transition: transform .15s; }
+    .fab:hover { transform: scale(1.06); }
+    .fab svg { width: 30px; height: 30px; }
+    .fab .ping { position: absolute; top: 2px; right: 2px; width: 14px; height: 14px; background: #f04438; border: 2px solid #fff; border-radius: 50%; }
+    .fab-hint { position: fixed; right: 92px; bottom: 34px; z-index: 80; background: #fff; border: 1px solid var(--border); box-shadow: var(--shadow); border-radius: 12px; padding: 9px 14px; font-size: 13px; font-weight: 500; animation: rise .3s ease; }
+    .chat-panel { position: fixed; right: 22px; bottom: 96px; width: 380px; height: min(640px, calc(100vh - 120px)); z-index: 90; border-radius: 18px; overflow: hidden; box-shadow: var(--shadow-lg); border: 1px solid var(--border); animation: pop .22s cubic-bezier(.2,.8,.2,1); }
+    .wa-head .x { margin-left: auto; background: transparent; border: 0; color: #fff; opacity: .85; padding: 4px; }
+    .wa-head .x svg { width: 20px; height: 20px; }
+    .inline-dates { background: #fff; border-radius: 10px; padding: 10px; display: grid; gap: 8px; align-self: stretch; box-shadow: 0 1px .5px rgba(0,0,0,.13); animation: rise .2s ease; }
+    .inline-dates label { font-size: 12px; font-weight: 600; color: #54656f; }
+    .inline-dates input, .inline-dates select { height: 36px; border: 1px solid #d1d7db; border-radius: 8px; padding: 0 8px; width: 100%; font-size: 13px; }
+
+    /* Modal de reserva */
+    .stepper { display: flex; gap: 8px; margin: 14px 0 0; }
+    .stepper div { flex: 1; height: 4px; border-radius: 4px; background: var(--border); transition: background .25s; }
+    .stepper div.on { background: var(--brand); }
+    .sum { display: flex; gap: 14px; align-items: center; background: var(--surface-2); border-radius: 12px; padding: 12px; }
+    .sum .art { width: 120px; flex-shrink: 0; }
+    .price-lines { font-size: 14px; }
+    .price-lines .row { padding: 6px 0; }
+    .price-lines .total { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 10px; font-weight: 700; font-size: 16px; }
+    .callout { display: flex; gap: 10px; padding: 12px 14px; border-radius: 10px; font-size: 13px; background: var(--info-bg); color: #194185; }
+    .callout svg { width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px; }
+    .callout.warn { background: var(--warn-bg); color: #93370d; }
+    .callout.err { background: var(--danger-bg); color: var(--danger); }
+    .success-ic { width: 64px; height: 64px; border-radius: 50%; background: var(--ok-bg); color: var(--ok); display: grid; place-items: center; margin: 6px auto 16px; }
+    .success-ic svg { width: 32px; height: 32px; }
+    .file-drop { border: 1.5px dashed var(--border-strong); border-radius: 10px; padding: 12px; font-size: 13px; color: var(--text-2); display: flex; gap: 10px; align-items: center; cursor: pointer; background: #fcfcfd; }
+    .file-drop svg { width: 20px; height: 20px; color: var(--text-3); }
+    .file-drop input { display: none; }
+    .file-drop.has { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); }
+
+    @media (max-width: 960px) {
+      .hero-grid, .two-col { grid-template-columns: 1fr; }
+      .hero-art { display: none; }
+      .search-card { grid-template-columns: 1fr 1fr; }
+      .search-card .loc { grid-column: 1 / -1; }
+      .search-card .btn { grid-column: 1 / -1; }
+      .steps { grid-template-columns: 1fr 1fr; }
+      nav.links { display: none; }
+    }
+    @media (max-width: 560px) {
+      .hero { padding-top: 36px; }
+      .hero h1 { font-size: 34px; }
+      .search-card { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: 1fr; }
+      .top-actions .btn-admin { display: none; }
+      .chat-panel { right: 0; left: 0; bottom: 0; width: 100%; height: 100%; border-radius: 0; }
+      .fab-hint { display: none; }
+      .cta { padding: 28px; }
+    }
+  </style>
+</head>
+<body>
+  
+  <header class="top">
+    <div class="container top-inner">
+      <a href="#" class="logo"><span class="logo-mark" id="logoMark"></span><span>Autos del Valle<small>Alquiler de vehículos · Medellín</small></span></a>
+      <nav class="links">
+        <a href="#vehiculos">Vehículos</a>
+        <a href="#como-funciona">Cómo funciona</a>
+        <a href="#requisitos">Requisitos</a>
+        <a href="#faq">Preguntas frecuentes</a>
+      </nav>
+      <div class="top-actions">
+        <button class="btn btn-wa btn-sm" data-open-chat><span id="waIc1"></span>Escríbenos</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="container hero-grid">
+      <div>
+        <span class="eyebrow">⚡ Cotiza y reserva en menos de 3 minutos</span>
+        <h1>El carro ideal para tu viaje, <span>sin complicaciones.</span></h1>
+        <p class="lead">Elige fechas, compara vehículos y envía tu solicitud. Nuestro asistente te atiende al instante, a cualquier hora.</p>
+        <div class="trust" id="trust"></div>
+      </div>
+      <div class="hero-art">
+        <div class="stage" id="heroCar"></div>
+        <div class="float f1"><span class="dot-ok" id="fIc1"></span><div><b>Reserva confirmada</b><div class="xs muted">Kia Sportage · 3 días</div></div></div>
+        <div class="float f2"><span class="dot-ok" id="fIc2" style="background:#e7f8ee;color:#128c7e"></span><div><b>Respuesta en segundos</b><div class="xs muted">Asistente 24/7</div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container search">
+    <form class="search-card" id="searchForm">
+      <div class="field loc"><label for="sLoc">Lugar de recogida</label><select class="select" id="sLoc"></select></div>
+      <div class="field"><label for="sStart">Recogida</label><input class="input" type="datetime-local" id="sStart" required /></div>
+      <div class="field"><label for="sEnd">Devolución</label><input class="input" type="datetime-local" id="sEnd" required /></div>
+      <button class="btn btn-primary btn-lg" type="submit" id="searchBtn">Ver disponibilidad</button>
+    </form>
+  </div>
+
+  <section class="block" id="vehiculos">
+    <div class="container">
+      <div class="section-head">
+        <div><h2>Nuestra flota</h2><p>Vehículos revisados, limpios y con seguro incluido.</p></div>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="avail-note" id="availNote"></div>
+      <div class="grid-cars" id="grid"></div>
+    </div>
+  </section>
+
+  <section class="block" id="como-funciona" style="background:#fff;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+    <div class="container">
+      <div class="section-head"><div><h2>Así de fácil es reservar</h2><p>Por la web o por WhatsApp, el proceso es el mismo.</p></div></div>
+      <div class="steps">
+        <div class="card step"><div class="num">1</div><h3>Elige fechas y vehículo</h3><p>Consulta disponibilidad real y el precio total antes de decidir.</p></div>
+        <div class="card step"><div class="num">2</div><h3>Envía tus datos</h3><p>Nombre, documento y licencia. Tus datos se tratan de forma segura.</p></div>
+        <div class="card step"><div class="num">3</div><h3>Verificamos y confirmamos</h3><p>Apartamos el vehículo mientras revisamos. Te confirmamos por WhatsApp.</p></div>
+        <div class="card step"><div class="num">4</div><h3>Recoge y disfruta</h3><p>Te recordamos la entrega y la devolución para que no te preocupes.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="requisitos">
+    <div class="container two-col">
+      <div>
+        <div class="section-head" style="margin-bottom:8px"><div><h2>Requisitos</h2><p>Lo que necesitas para alquilar con nosotros.</p></div></div>
+        <ul class="req-list" id="reqList"></ul>
+      </div>
+      <div>
+        <div class="section-head" style="margin-bottom:8px"><div><h2>Condiciones del servicio</h2><p>Claras desde el principio.</p></div></div>
+        <ul class="req-list" id="condList"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="faq" style="padding-top:0">
+    <div class="container two-col">
+      <div>
+        <div class="section-head"><div><h2>Preguntas frecuentes</h2><p>¿Tienes otra duda? Pregúntale al asistente.</p></div></div>
+        <button class="btn" data-open-chat><span id="waIc2"></span>Preguntar por chat</button>
+      </div>
+      <div id="faqList"></div>
+    </div>
+  </section>
+
+  <section class="container">
+    <div class="cta">
+      <div><h2>¿Prefieres que te asesoremos?</h2><p>Escríbenos y te ayudamos a elegir el vehículo ideal en minutos.</p></div>
+      <button class="btn btn-wa btn-lg" data-open-chat><span id="waIc3"></span>Hablar por WhatsApp</button>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container row between wrap">
+      <span>© <span data-negocio>Autos del Valle</span> · Desarrollado con RodaRent</span>
+      <span class="row"><a href="#requisitos">Condiciones</a><a href="#" id="privacyLink">Política de datos</a><a href="/admin">Acceso equipo</a></span>
+    </div>
+  </footer>
+
+  <button class="fab" id="fab" aria-label="Abrir chat"><span id="fabIc"></span><span class="ping"></span></button>
+  <div class="fab-hint" id="fabHint">¿Te ayudo a cotizar? 👋</div>
+  <div class="chat-panel hidden" id="chatPanel"></div>
+
+  <script src="/assets/shared.js"></script>
+  <script src="/assets/public.js"></script>
+</body>
+</html>

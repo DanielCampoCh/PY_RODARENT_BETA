@@ -1,0 +1,34 @@
+# Despliegue en Render (plan gratuito). Render → New → Blueprint → elige este repositorio.
+services:
+  - type: web
+    name: rodarent
+    runtime: node
+    plan: free
+    region: ohio # misma zona que la base de Neon (AWS US East 2, Ohio)
+    rootDir: web
+    # Crea tablas, datos de ejemplo (si la base está vacía) y usuarios del panel; luego compila.
+    buildCommand: npm ci && node scripts/setup-db.mjs && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NOMBRE
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CLAUDE_MODEL
+        value: claude-haiku-5-5
+      - key: NEGOCIO_NOMBRE
+        value: Autos del Valle
+      - key: NEGOCIO_CIUDAD
+        value: Medellín
+      - key: NEGOCIO_WHATSAPP
+        sync: false
