@@ -114,6 +114,13 @@ create table if not exists mensajes (
 );
 create index if not exists mensajes_conv_idx on mensajes (conversacion_id, id);
 
+-- Mensajes de WhatsApp ya procesados (Meta puede reenviar el mismo aviso).
+create table if not exists whatsapp_procesados (
+  id text primary key,
+  fecha timestamptz not null default now()
+);
+create unique index if not exists conversaciones_whatsapp_tel on conversaciones (telefono) where canal = 'whatsapp' and estado <> 'cerrada';
+
 create table if not exists auditoria (
   id bigserial primary key,
   actor text not null,

@@ -651,14 +651,14 @@
       </div>
       <div class="right">${sel ? convPane(sel) : `<div class="empty" style="margin:auto">${I.chat.replace("<svg", '<svg width="40" height="40" style="margin:0 auto 10px;color:var(--text-3)"')}Selecciona una conversación</div>`}</div>
     </div>
-    <p class="xs subtle" style="margin-top:10px">Aquí llegan los chats del sitio web. Tus respuestas le aparecen al cliente en el chat en pocos segundos. WhatsApp Business se conecta en la siguiente etapa.</p>`;
+    <p class="xs subtle" style="margin-top:10px">Aquí llegan los chats del sitio web y de WhatsApp. Al tomar una conversación, la IA se pausa y tus respuestas le llegan al cliente por el mismo canal.</p>`;
     $$("[data-f]", v).forEach((b) => b.addEventListener("click", () => { state.convFilter = b.dataset.f; viewConversaciones(v); }));
     $$("[data-th]", v).forEach((t) => t.addEventListener("click", () => { state.convSel = t.dataset.th; const c = S.conversations.find((x) => x.id === t.dataset.th); if (c.noLeidos) { c.noLeidos = 0; RR.api("/api/admin/accion", { tipo: "leer_conv", id: c.id }).catch(() => {}); } renderSide(); viewConversaciones(v); }));
     if (sel) bindConv(v, sel);
   }
   function convPane(c) {
     const r = c.reserva && RR.get.reservation(c.reserva);
-    return `<div class="conv-head"><button class="btn btn-ghost btn-icon btn-sm" id="cvBack" aria-label="Volver">${I.back}</button>${avatar(c.nombre)}<div class="grow"><b>${esc(c.nombre)}</b><div class="xs subtle">${esc(c.tel)} · ${RR.CONV_STATUS[c.estado].label}</div></div>
+    return `<div class="conv-head"><button class="btn btn-ghost btn-icon btn-sm" id="cvBack" aria-label="Volver">${I.back}</button>${avatar(c.nombre)}<div class="grow"><b>${esc(c.nombre)}</b><div class="xs subtle">${c.canal === "whatsapp" ? "WhatsApp" : "Chat web"}${c.tel ? " · " + esc(c.tel) : ""} · ${RR.CONV_STATUS[c.estado].label}</div></div>
         ${r ? `<button class="btn btn-sm" data-res="${r.id}">${r.codigo} · ${RR.RES_STATUS[r.estado].label}</button>` : ""}
         ${c.estado !== "humano" ? `<button class="btn btn-sm btn-primary" id="cvTake">Tomar conversación</button>` : `<button class="btn btn-sm" id="cvBot">Devolver a la IA</button>`}</div>
       ${c.estado === "humano" ? `<div class="conv-banner"><span>Estás atendiendo esta conversación. La IA está en pausa.</span></div>` : c.estado === "pendiente" ? `<div class="conv-banner" style="background:var(--danger-bg);color:var(--danger)"><span>El cliente espera a un asesor desde ${RR.relTime(c.ultima)}.</span></div>` : ""}
@@ -681,7 +681,9 @@
     const st = S.settings, ro = !isAdmin(), dis = ro ? "disabled" : "";
     const sw = (id, on) => `<label class="switch"><input type="checkbox" id="${id}" ${on ? "checked" : ""} ${dis}><span></span></label>`;
     const INTEG = [
-      ["WhatsApp Business (Cloud API)", "No conectado", "b-neutral", "Requiere cuenta Meta Business verificada, número dedicado y plantillas aprobadas · Etapa 5"],
+      S.whatsappActivo
+        ? ["WhatsApp Business (Cloud API)", "Conectado", "b-ok", "El asistente responde por WhatsApp y el equipo puede contestar desde Conversaciones"]
+        : ["WhatsApp Business (Cloud API)", "Sin configurar", "b-neutral", "Faltan las variables WHATSAPP_* en el servidor (ver guía)"],
       S.iaDisponible
         ? ["Asistente de IA (chat web)", "Conectado", "b-ok", "Responde en el sitio web con datos reales de flota y reservas"]
         : ["Asistente de IA (chat web)", "Sin configurar", "b-warn", "Falta la variable ANTHROPIC_API_KEY en el servidor; mientras tanto los chats pasan a un asesor"],

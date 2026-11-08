@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { usuarioActual } from "@/lib/auth";
+import { waConfig } from "@/lib/whatsapp";
 import { ajustes, expirar, mapCliente, mapReserva, mapVehiculo, negocio } from "@/lib/repo";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,7 @@ export async function GET() {
     me: { nombre: u.nombre, rol: u.rol === "admin" ? "Administrador" : "Operador", key: u.rol },
     negocio: negocio(),
     iaDisponible: !!process.env.ANTHROPIC_API_KEY,
+    whatsappActivo: waConfig().activo,
     vehicles: veh.map(mapVehiculo),
     customers: cli.map((c) => mapCliente(c, u.rol !== "admin")),
     reservations: res.map((r) => mapReserva(r, histPor.get(r.id))),

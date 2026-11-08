@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db, dias, esCruce, fmtFecha } from "@/lib/db";
 import { actorDe, usuarioActual, type Usuario } from "@/lib/auth";
 import { crearReserva, upsertCliente } from "@/lib/repo";
+import { enviarTexto, ErrorWhatsApp } from "@/lib/whatsapp";
 
 const ETIQ: Record<string, string> = { pendiente: "Pendiente", aprobada: "Confirmada", en_curso: "En curso", finalizada: "Finalizada", rechazada: "Rechazada", vencida: "Vencida", cancelada: "Cancelada" };
 const VERIF = z.enum(["verificado", "pendiente", "rechazado"]);
@@ -170,9 +171,14 @@ async function ejecutar(a: z.infer<typeof Accion>, u: Usuario): Promise<Record<s
     }
     case "leer_conv": await sql`update conversaciones set no_leidos = 0 where id = ${a.id}`; return;
     case "responder_conv": {
-      const [k] = await sql`select estado from conversaciones where id = ${a.id}`;
+      const [k] = await sql`select estado, canal, telefono from conversaciones where id = ${a.id}`;
       if (!k) throw new Fallo("Conversación no encontrada", 404);
       if (k.estado !== "humano") throw new Fallo("Toma la conversación antes de responder.", 409);
+      // En WhatsApp se envía primero; si Meta lo rechaza, no se guarda como enviado.
+      if (k.canal === "whatsapp") {
+        try { await enviarTexto(k.telefono, a.texto); }
+        catch (e) { throw new Fallo(e instanceof ErrorWhatsApp ? e.message : "No se pudo enviar por WhatsApp.", 502); }
+      }
       await sql`insert into mensajes (conversacion_id, emisor, texto) values (${a.id}, 'humano', ${a.texto})`;
       // Se agrega al historial de la IA (solo se agrega, nunca se edita) para que tenga contexto si retoma.
       const item = { role: "assistant", content: [{ type: "text", text: `[Mensaje del asesor ${u.nombre.split(" ")[0]}]: ${a.texto}` }] };

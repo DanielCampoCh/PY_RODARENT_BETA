@@ -4,7 +4,8 @@ import { db, dias, fmtFechaHora, soloDigitos, TZ } from "./db";
 import { ajustes, crearReserva, mismoTel, negocio, normalizarDoc, upsertCliente, vehiculosDisponibles, type Ajustes } from "./repo";
 
 type Msg = Anthropic.Beta.BetaMessageParam;
-export type Conv = { id: string; cliente_id: string | null; nombre: string; telefono: string | null; estado: string; historial_api: Msg[] };
+export type Conv = { id: string; cliente_id: string | null; nombre: string; telefono: string | null; canal?: string; estado: string; historial_api: Msg[] };
+const esWhatsApp = (c: Conv) => c.canal === "whatsapp" && !!c.telefono;
 
 const MODEL = () => process.env.CLAUDE_MODEL || "claude-haiku-5-5";
 const MAX_VUELTAS = 8;
@@ -32,14 +33,14 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
   },
   {
     name: "identificar_cliente",
-    description: "Busca a un cliente ya registrado para consultar sus reservas. Requiere número de documento Y celular; solo devuelve datos si ambos coinciden. No reveles nada si no coincide.",
+    description: "Busca a un cliente ya registrado para consultar sus reservas. Requiere número de documento y celular (en WhatsApp el celular es el del chat); solo devuelve datos si ambos coinciden. No reveles nada si no coincide.",
     input_schema: {
       type: "object",
       properties: {
         documento: { type: "string", description: "Número de cédula o pasaporte" },
-        telefono: { type: "string", description: "Celular con el que se registró" },
+        telefono: { type: "string", description: "Celular con el que se registró. En WhatsApp no hace falta: se usa el número del chat." },
       },
-      required: ["documento", "telefono"],
+      required: ["documento"],
       additionalProperties: false,
     },
   },
@@ -60,7 +61,7 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
         notas: { type: "string", description: "Propósito del viaje u observaciones" },
         autoriza_datos: { type: "boolean", description: "true solo si el cliente dijo explícitamente que autoriza el tratamiento de sus datos" },
       },
-      required: ["vehiculo_id", "inicio", "fin", "nombre", "documento", "telefono", "lugar", "autoriza_datos"],
+      required: ["vehiculo_id", "inicio", "fin", "nombre", "documento", "lugar", "autoriza_datos"],
       additionalProperties: false,
     },
   },
@@ -79,10 +80,10 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
 const In = {
   buscar_disponibilidad: z.object({ inicio: z.string().datetime({ offset: true }), fin: z.string().datetime({ offset: true }), pasajeros: z.number().int().min(1).max(30).optional() }),
   ver_flota: z.object({}),
-  identificar_cliente: z.object({ documento: z.string().min(4).max(30), telefono: z.string().min(7).max(25) }),
+  identificar_cliente: z.object({ documento: z.string().min(4).max(30), telefono: z.string().min(7).max(25).optional() }),
   crear_solicitud_reserva: z.object({
     vehiculo_id: z.string().uuid(), inicio: z.string().datetime({ offset: true }), fin: z.string().datetime({ offset: true }),
-    nombre: z.string().min(3).max(120), documento: z.string().min(5).max(30), telefono: z.string().min(7).max(25), email: z.string().max(200).optional(),
+    nombre: z.string().min(3).max(120), documento: z.string().min(5).max(30), telefono: z.string().min(7).max(25).optional(), email: z.string().max(200).optional(),
     lugar: z.string().max(120), notas: z.string().max(500).optional(), autoriza_datos: z.boolean(),
   }),
   escalar_a_humano: z.object({ motivo: z.string().min(2).max(300) }),
@@ -116,7 +117,10 @@ async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a
       const doc = normalizarDoc(p.data.documento);
       const [c] = await sql`select id, nombre, telefono, verificacion from clientes where replace(documento, ' ', '') = ${doc.replace(" ", "")}
         or regexp_replace(documento, '\\D', '', 'g') = ${soloDigitos(p.data.documento)} limit 1`;
-      if (!c || !mismoTel(c.telefono, p.data.telefono)) return ok({ encontrado: false, nota: "No hay un cliente con ese documento y celular. No des más detalles; ofrece crear una nueva solicitud." });
+      // En WhatsApp el número lo verifica WhatsApp; en la web lo escribe el cliente.
+      const tel = esWhatsApp(conv) ? conv.telefono! : p.data.telefono;
+      if (!tel) return err("Pide también el celular con el que se registró.");
+      if (!c || !mismoTel(c.telefono, tel)) return ok({ encontrado: false, nota: "No hay un cliente con ese documento y celular. No des más detalles; ofrece crear una nueva solicitud." });
       const rs = await sql`select r.codigo, r.inicio, r.fin, r.estado, r.total, r.expira_en, v.marca, v.modelo from reservas r join vehiculos v on v.id = r.vehiculo_id
         where r.cliente_id = ${c.id} order by r.inicio desc limit 10`;
       await sql`update conversaciones set cliente_id = ${c.id}, nombre = ${c.nombre}, telefono = coalesce(telefono, ${c.telefono}) where id = ${conv.id}`;
@@ -132,9 +136,12 @@ async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a
       const d = p.data;
       if (!d.autoriza_datos) return err("El cliente no ha autorizado el tratamiento de datos. Pídele la autorización explícita antes de registrar.");
       if (!a.lugares.includes(d.lugar)) return err(`Lugar no válido. Opciones: ${a.lugares.join("; ")}`);
-      const c = await upsertCliente({ nombre: d.nombre, documento: d.documento, telefono: d.telefono, email: d.email, origen: "chat", consentimiento: true });
+      const tel = esWhatsApp(conv) ? conv.telefono! : d.telefono;
+      if (!tel) return err("Falta el celular del cliente.");
+      const origen = esWhatsApp(conv) ? "whatsapp" : "chat";
+      const c = await upsertCliente({ nombre: d.nombre, documento: d.documento, telefono: tel, email: d.email, origen, consentimiento: true });
       if (!c.ok) return err(c.error + " Usa escalar_a_humano.");
-      const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: d.vehiculo_id, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen: "chat", notas: d.notas, actor: "Asistente IA" });
+      const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: d.vehiculo_id, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen, notas: d.notas, actor: "Asistente IA" });
       if (!r.ok) return err(r.error);
       await sql`update conversaciones set cliente_id = ${c.cliente.id}, reserva_id = ${r.reserva.id}, nombre = ${c.cliente.nombre}, telefono = ${c.cliente.telefono} where id = ${conv.id}`;
       await sql`insert into mensajes (conversacion_id, emisor, texto) values (${conv.id}, 'sistema', ${`Solicitud ${r.reserva.codigo} creada · pre-reserva vence ${fmtFechaHora(r.reserva.expira_en)}`})`;
@@ -169,7 +176,7 @@ Cómo atender:
 5. Antes de registrar, pide autorización explícita para tratar sus datos personales con el fin de gestionar la reserva (Ley 1581 de 2012). Si no autoriza, no registres y ofrece un asesor.
 6. Registra con crear_solicitud_reserva y entrega el código. Aclara que es una pre-reserva: un asesor revisa los documentos y confirma; tú nunca confirmas ni apruebas reservas.
 
-Clientes que ya reservaron: para consultar sus reservas pide documento y celular y usa identificar_cliente. Si no coinciden, no confirmes si la persona existe ni des datos de nadie.
+Clientes que ya reservaron: para consultar sus reservas pide el documento (y el celular si es el chat web) y usa identificar_cliente. Si no coinciden, no confirmes si la persona existe ni des datos de nadie.
 
 Requisitos: edad mínima ${a.edadMinima} años; cédula o pasaporte; licencia ${a.licenciaVigente ? "vigente durante todo el alquiler, " : ""}categoría ${a.categorias.join(", ")}${a.depositoObligatorio ? "; depósito de garantía reembolsable (monto según vehículo)" : ""}${a.experienciaActiva ? `; al menos ${a.experienciaMin} años de experiencia conduciendo` : ""}.
 Condiciones: días de 24 horas; se entrega con tanque lleno y se devuelve igual; kilometraje libre dentro de Antioquia; SOAT y seguro todo riesgo incluidos con deducible; cancelación sin costo hasta 48 horas antes; las pre-reservas se apartan ${a.prereservaHoras} horas.
@@ -196,7 +203,7 @@ export async function atender(conv: Conv, texto: string): Promise<Resultado> {
 
   let historial: Msg[] = Array.isArray(conv.historial_api) ? conv.historial_api : [];
   const nuevos: Msg[] = [];
-  if (historial.length === 0 || historial[0].role !== "user") nuevos.push({ role: "user", content: [{ type: "text", text: "(Inicio de la conversación por chat web)" }] });
+  if (historial.length === 0 || historial[0].role !== "user") nuevos.push({ role: "user", content: [{ type: "text", text: "(Inicio de la conversación)" }] });
   nuevos.push({ role: "user", content: [{ type: "text", text: texto }] });
 
   const guardar = async () => {
@@ -221,7 +228,10 @@ export async function atender(conv: Conv, texto: string): Promise<Resultado> {
   const textos: string[] = [];
   // La fecha actual va como mensaje de sistema tras el mensaje del cliente y se guarda en el historial
   // (el historial solo crece; así no se invalida la caché ni el razonamiento previo).
-  nuevos.push({ role: "system", content: ahora() } as unknown as Msg);
+  const canal = esWhatsApp(conv)
+    ? ` El cliente escribe por WhatsApp desde el número ${conv.telefono} (verificado por WhatsApp): no le pidas el celular. Escribe en texto plano; para resaltar usa *asteriscos simples*.`
+    : " El cliente escribe desde el chat del sitio web.";
+  nuevos.push({ role: "system", content: ahora() + canal } as unknown as Msg);
   historial = [...historial, ...nuevos];
 
   for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta++) {

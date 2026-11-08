@@ -87,3 +87,16 @@ Si la compilación falla con "Falta DATABASE_URL", la base aún no está conecta
 - **Notificaciones** por correo/WhatsApp y **Google Calendar**.
 - Límite de mensajes por IP más robusto (hoy es en memoria por instancia).
 - Revisión legal del texto de tratamiento de datos.
+
+## WhatsApp Business (Cloud API)
+
+El mismo asistente responde por WhatsApp. Webhook: `https://TU-SERVICIO.onrender.com/api/whatsapp`.
+
+- **Entrante:** Meta envía cada mensaje al webhook; la app verifica la firma (`WHATSAPP_APP_SECRET`), ignora duplicados, responde con la IA y guarda todo en *Conversaciones*.
+- **Número verificado:** en WhatsApp el celular lo garantiza WhatsApp, así que el asistente no lo pide y lo usa para identificar al cliente y registrar la solicitud (origen *WhatsApp*).
+- **Asesor:** al *Tomar conversación* la IA se pausa y tus respuestas salen por WhatsApp. Meta solo permite texto libre dentro de las 24 h siguientes al último mensaje del cliente.
+- **Fotos, audios y documentos:** se registran en el panel y se pide escribir en texto (la lectura de documentos queda para otra etapa).
+
+Variables: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` (opcional `WHATSAPP_API_VERSION`, por defecto `v23.0`).
+
+Con el **número de prueba** de Meta (gratis) solo se puede chatear con hasta 5 números que registres en la app de Meta. Para atender a cualquier cliente se necesita un número propio y la verificación del negocio en Meta.

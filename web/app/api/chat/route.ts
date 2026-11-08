@@ -27,8 +27,8 @@ export async function POST(req: Request) {
   if (limitado(parsed.data.conversacion ?? ip)) return NextResponse.json({ error: "Estás enviando mensajes muy rápido. Espera un momento." }, { status: 429 });
 
   let conv;
-  if (parsed.data.conversacion) [conv] = await sql`select id, cliente_id, nombre, telefono, estado, historial_api from conversaciones where id = ${parsed.data.conversacion}`;
-  if (!conv) [conv] = await sql`insert into conversaciones (canal) values ('web') returning id, cliente_id, nombre, telefono, estado, historial_api`;
+  if (parsed.data.conversacion) [conv] = await sql`select id, cliente_id, nombre, telefono, canal, estado, historial_api from conversaciones where id = ${parsed.data.conversacion} and canal = 'web'`;
+  if (!conv) [conv] = await sql`insert into conversaciones (canal) values ('web') returning id, cliente_id, nombre, telefono, canal, estado, historial_api`;
   if (conv.estado === "cerrada") await sql`update conversaciones set estado = 'ia' where id = ${conv.id}`;
 
   const r = await atender({ ...(conv as unknown as Conv), estado: conv.estado === "cerrada" ? "ia" : conv.estado }, parsed.data.mensaje);
