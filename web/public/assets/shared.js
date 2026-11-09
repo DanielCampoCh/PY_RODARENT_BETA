@@ -130,7 +130,7 @@
     { key: "deposito", label: "Depósito / garantía" },
   ];
   // El requisito de antecedentes solo cuenta si está activado en Ajustes.
-  RR.reqItems = () => [...RR.REQ_ITEMS, ...(RR.store.state?.settings?.antecedentesActiva ? [{ key: "antecedentes", label: "Antecedentes (Policía y Procuraduría)" }] : [])];
+  RR.reqItems = () => [...RR.REQ_ITEMS, ...(RR.store.state?.settings?.antecedentesActiva ? [{ key: "antecedentes", label: "Antecedentes" }] : [])];
 
   /* ---------- Estado y API ---------- */
   // El estado viene del servidor (base de datos). Aquí solo se guarda en memoria para pintar la interfaz.

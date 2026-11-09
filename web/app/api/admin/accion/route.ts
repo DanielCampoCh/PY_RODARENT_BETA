@@ -4,6 +4,7 @@ import { db, dias, esCruce, fmtFecha } from "@/lib/db";
 import { actorDe, usuarioActual, type Usuario } from "@/lib/auth";
 import { ajustes, crearReserva, requisitosRequeridos, upsertCliente } from "@/lib/repo";
 import { verificarCliente, verifikActivo } from "@/lib/verifik";
+import { leerCertificado } from "@/lib/procuraduria";
 import { enviarTexto, ErrorWhatsApp, probarConexion } from "@/lib/whatsapp";
 
 const ETIQ: Record<string, string> = { pendiente: "Pendiente", aprobada: "Confirmada", en_curso: "En curso", finalizada: "Finalizada", rechazada: "Rechazada", vencida: "Vencida", cancelada: "Cancelada" };
@@ -44,6 +45,15 @@ const Accion = z.discriminatedUnion("tipo", [
   z.object({ tipo: z.literal("leer_notifs") }),
   z.object({ tipo: z.literal("probar_whatsapp") }),
   z.object({ tipo: z.literal("verificar_fuentes"), clienteId: id, autorizado: z.boolean().optional().default(false) }),
+  // Antecedentes en la Procuraduría: la consulta la hace una persona en la página oficial; aquí se lee y guarda el resultado.
+  z.object({ tipo: z.literal("guardar_personal"), id: id.optional(), nombre: z.string().trim().min(3).max(120), documento: z.string().trim().regex(/^[0-9.\s]{5,15}$/, "Cédula inválida."), cargo: z.string().trim().max(60).default(""), telefono: z.string().trim().max(20).optional() }),
+  z.object({ tipo: z.literal("quitar_personal"), id }),
+  z.object({ tipo: z.literal("importar_personal"), filas: z.array(z.object({ documento: z.string().trim().max(20), nombre: z.string().trim().max(120).optional(), cargo: z.string().trim().max(60).optional() })).min(1).max(500) }),
+  z.object({ tipo: z.literal("leer_antecedentes"), sujeto: z.enum(["cliente", "personal"]), id, texto: z.string().min(10).max(60000) }),
+  z.object({
+    tipo: z.literal("guardar_antecedentes"), sujeto: z.enum(["cliente", "personal"]), id, texto: z.string().min(10).max(60000), autorizado: z.boolean().optional().default(false),
+    archivo: z.object({ nombre: z.string().max(200), tipo: z.enum(["application/pdf", "image/png", "image/jpeg", "image/webp"]), base64: z.string().max(2_800_000, "El archivo supera 2 MB.") }).optional(),
+  }),
   z.object({
     tipo: z.literal("ajustes"),
     data: z.object({
@@ -54,7 +64,12 @@ const Accion = z.discriminatedUnion("tipo", [
   }),
 ]);
 
-const SOLO_ADMIN = new Set(["aprobar", "verificar_todos", "verificar", "guardar_vehiculo", "ajustes", "probar_whatsapp", "verificar_fuentes"]);
+const SOLO_ADMIN = new Set(["aprobar", "verificar_todos", "verificar", "guardar_vehiculo", "ajustes", "probar_whatsapp", "verificar_fuentes",
+  "guardar_personal", "quitar_personal", "importar_personal", "leer_antecedentes", "guardar_antecedentes"]);
+
+const soloDigitos = (s: string) => s.replace(/\D/g, "");
+const titulo = (s: string) => s.toLowerCase().replace(/(^|\s)(\p{L})/gu, (_, a, b) => a + b.toUpperCase());
+const RESULTADO_EXT = { limpio: "ok", con_antecedentes: "hallazgo", no_encontrado: "no_encontrado" } as const;
 
 class Fallo extends Error { constructor(m: string, public status = 400) { super(m); } }
 
@@ -219,6 +234,77 @@ async function ejecutar(a: z.infer<typeof Accion>, u: Usuario): Promise<Record<s
       const [r] = await sql`select fin from reservas where cliente_id = ${a.clienteId} and estado in ('pendiente', 'aprobada') order by inicio limit 1`;
       const res = await verificarCliente(a.clienteId, actor, r ? new Date(r.fin).toISOString() : undefined);
       return { verificados: res.verificados, revisar: res.revisar };
+    }
+    case "guardar_personal": {
+      const doc = soloDigitos(a.documento);
+      try {
+        if (a.id) await sql`update personal set nombre = ${a.nombre}, documento = ${doc}, cargo = ${a.cargo}, telefono = ${a.telefono || null} where id = ${a.id}`;
+        else await sql`insert into personal (nombre, documento, cargo, telefono) values (${a.nombre}, ${doc}, ${a.cargo}, ${a.telefono || null})
+          on conflict (documento) do update set nombre = excluded.nombre, cargo = excluded.cargo, telefono = excluded.telefono, activo = true`;
+      } catch (e) {
+        if ((e as { code?: string }).code === "23505") throw new Fallo("Ya hay otra persona del personal con esa cédula.", 409);
+        throw e;
+      }
+      await log(`${a.id ? "Editó" : "Registró"} a ${a.nombre} en el personal`);
+      return;
+    }
+    case "quitar_personal": {
+      const [p] = await sql`update personal set activo = false where id = ${a.id} returning nombre`;
+      if (!p) throw new Fallo("No encontrado", 404);
+      await log(`Quitó a ${p.nombre} del personal`);
+      return;
+    }
+    case "importar_personal": {
+      const filas = a.filas.map((f) => ({ ...f, documento: soloDigitos(f.documento) })).filter((f) => f.documento.length >= 5 && f.documento.length <= 15);
+      let nuevos = 0;
+      for (const f of filas) {
+        const r = await sql`insert into personal (nombre, documento, cargo) values (${f.nombre || "Por identificar"}, ${f.documento}, ${f.cargo || "Importado"})
+          on conflict (documento) do update set activo = true returning (xmax = 0) as nuevo`;
+        if (r[0]?.nuevo) nuevos++;
+      }
+      await log(`Importó una lista de ${filas.length} cédula(s) para consultar antecedentes`);
+      return { nuevos, total: filas.length, descartadas: a.filas.length - filas.length };
+    }
+    case "leer_antecedentes":
+    case "guardar_antecedentes": {
+      const [s] = a.sujeto === "cliente"
+        ? await sql`select id, nombre, documento, verificacion, consentimiento_antecedentes from clientes where id = ${a.id}`
+        : await sql`select id, nombre, documento from personal where id = ${a.id}`;
+      if (!s) throw new Fallo("No encontrado", 404);
+      const lectura = leerCertificado(a.texto, s.documento, s.nombre);
+      if (a.tipo === "leer_antecedentes") return { lectura };
+      if (!lectura.coincide_documento) throw new Fallo(lectura.documento ? `Ese resultado es de la cédula ${lectura.documento}, no de ${soloDigitos(s.documento)}. Revisa que consultaste la cédula correcta.` : "No se encontró la cédula en el resultado. Copia la página de resultados completa (Ctrl+A, Ctrl+C) o sube el certificado.", 409);
+      // Ley 1581: la consulta requiere autorización expresa de la persona.
+      if (a.sujeto === "cliente" && !s.consentimiento_antecedentes) {
+        if (!a.autorizado) throw new Fallo("Primero confirma que el cliente autorizó la consulta de sus antecedentes.", 409);
+        await sql`update clientes set consentimiento_antecedentes = now() where id = ${s.id}`;
+        await log(`Registró autorización de consulta de antecedentes de ${s.nombre} (dada al equipo)`);
+      }
+      if (a.sujeto === "personal" && !a.autorizado) throw new Fallo("Primero confirma que la persona autorizó la consulta de sus antecedentes.", 409);
+      const archivo = a.archivo ? Buffer.from(a.archivo.base64, "base64") : null;
+      if (archivo && archivo.length > 2_000_000) throw new Fallo("El archivo supera 2 MB.");
+      const [c] = await sql`insert into consultas_antecedentes (cliente_id, personal_id, documento, nombre_certificado, primer_nombre, segundo_nombre, primer_apellido, segundo_apellido,
+          estado, coincide_documento, coincide_nombre, detalle, texto, archivo, archivo_tipo, archivo_nombre, actor)
+        values (${a.sujeto === "cliente" ? s.id : null}, ${a.sujeto === "personal" ? s.id : null}, ${lectura.documento}, ${lectura.nombre_completo}, ${lectura.primer_nombre}, ${lectura.segundo_nombre},
+          ${lectura.primer_apellido}, ${lectura.segundo_apellido}, ${lectura.estado}, ${lectura.coincide_documento}, ${lectura.coincide_nombre}, ${lectura.detalle},
+          ${a.texto.slice(0, 8000)}, ${archivo}, ${a.archivo?.tipo ?? null}, ${a.archivo?.nombre ?? null}, ${actor}) returning id`;
+      const etiqueta = { limpio: "sin antecedentes", con_antecedentes: "CON antecedentes", no_encontrado: "no encontrado", revisar: "por revisar" }[lectura.estado];
+      let marcado = false;
+      if (a.sujeto === "cliente") {
+        if (lectura.estado !== "revisar") await sql`insert into verificaciones_externas (cliente_id, fuente, resultado, detalle, referencia, actor)
+          values (${s.id}, 'Procuraduría (consulta en la página oficial)', ${RESULTADO_EXT[lectura.estado]}, ${lectura.detalle}, ${String(c.id)}, ${actor})`;
+        // Solo se marca como verificado si no hay antecedentes y la cédula y el nombre coinciden. Nunca se rechaza automáticamente.
+        if (lectura.estado === "limpio" && lectura.coincide_nombre !== false && s.verificacion?.antecedentes !== "rechazado") {
+          await sql`update clientes set verificacion = jsonb_set(verificacion, '{antecedentes}', '"verificado"') where id = ${s.id}`;
+          marcado = true;
+        }
+      } else if (/^por identificar$/i.test(s.nombre) && lectura.nombre_completo) {
+        await sql`update personal set nombre = ${titulo(lectura.nombre_completo)} where id = ${s.id}`;
+      }
+      if (lectura.estado === "con_antecedentes" || lectura.coincide_nombre === false)
+        await sql`insert into notificaciones (texto) values (${`Antecedentes de ${s.nombre} (${a.sujeto}): ${lectura.detalle}`})`;
+      await log(`Consultó antecedentes en la Procuraduría de ${s.nombre} (${a.sujeto}): ${etiqueta}`);
+      return { lectura, marcado, consulta: String(c.id) };
     }
     case "probar_whatsapp": return { prueba: await probarConexion() };
     case "leer_notifs": await sql`update notificaciones set leida = true where not leida`; return;

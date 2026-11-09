@@ -165,3 +165,40 @@ begin
   get diagnostics n = row_count;
   return n;
 end $$;
+
+-- Personal del negocio (para validar su cédula en la Procuraduría).
+create table if not exists personal (
+  id uuid primary key default gen_random_uuid(),
+  nombre text not null,
+  documento text not null unique,
+  cargo text not null default '',
+  telefono text,
+  activo boolean not null default true,
+  creado_en timestamptz not null default now()
+);
+
+-- Consultas de antecedentes hechas por una persona del equipo en la página oficial de la Procuraduría.
+-- El sistema solo lee el resultado que el asesor pega o el certificado PDF que sube.
+create table if not exists consultas_antecedentes (
+  id bigserial primary key,
+  cliente_id uuid references clientes (id) on delete cascade,
+  personal_id uuid references personal (id) on delete cascade,
+  documento text not null,
+  nombre_certificado text not null default '',
+  primer_nombre text not null default '',
+  segundo_nombre text not null default '',
+  primer_apellido text not null default '',
+  segundo_apellido text not null default '',
+  estado text not null check (estado in ('limpio', 'con_antecedentes', 'no_encontrado', 'revisar')),
+  coincide_documento boolean not null default false,
+  coincide_nombre boolean,
+  detalle text not null default '',
+  texto text not null default '',
+  archivo bytea,
+  archivo_tipo text,
+  archivo_nombre text,
+  actor text not null,
+  fecha timestamptz not null default now(),
+  check ((cliente_id is null) <> (personal_id is null))
+);
+create index if not exists consultas_antecedentes_fecha_idx on consultas_antecedentes (fecha desc);

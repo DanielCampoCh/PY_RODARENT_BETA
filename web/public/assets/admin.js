@@ -10,7 +10,7 @@
   let me = null;
   const isAdmin = () => me && me.key === "admin";
 
-  const state = { view: "resumen", resTab: "todas", resQ: "", calMode: "semana", calDate: RR.startOfDay(new Date()), vehTab: "todos", cliQ: "", convFilter: "todas", convSel: null };
+  const state = { view: "resumen", resTab: "todas", resQ: "", calMode: "semana", calDate: RR.startOfDay(new Date()), vehTab: "todos", cliQ: "", convFilter: "todas", convSel: null, antTab: "todos", antQ: "" };
 
   /** Carga el estado desde el servidor. Devuelve false si no hay sesión. */
   async function cargar() {
@@ -93,12 +93,13 @@
     ["vehiculos", "Vehículos", "car"],
     ["clientes", "Clientes", "users"],
     ["conversaciones", "Conversaciones", "chat", () => unattended()],
+    ["antecedentes", "Antecedentes", "shield", null, true],
     ["ajustes", "Ajustes", "settings"],
   ];
   function renderSide() {
     $("#side").innerHTML = `
       <div class="brand"><span class="mk">${I.car}</span><div>RodaRent<small>${esc(RR.BUSINESS.name)}</small></div></div>
-      <nav>${NAV.map(([k, l, i, cnt]) => { const n = cnt ? cnt() : 0; return `<a href="#${k}" class="${state.view === k ? "active" : ""}">${I[i]}${l}${n ? `<span class="cnt ${k === "reservas" ? "soft" : ""}">${n}</span>` : ""}</a>`; }).join("")}</nav>
+      <nav>${NAV.filter((n) => !n[4] || isAdmin()).map(([k, l, i, cnt]) => { const n = cnt ? cnt() : 0; return `<a href="#${k}" class="${state.view === k ? "active" : ""}">${I[i]}${l}${n ? `<span class="cnt ${k === "reservas" ? "soft" : ""}">${n}</span>` : ""}</a>`; }).join("")}</nav>
       <div class="bottom">
         <a class="linkbtn" href="/" target="_blank" rel="noopener">${I.link}Ver sitio público</a>
         <div class="me">${avatar(me.nombre)}<div class="grow"><b>${esc(me.nombre)}</b><span>${me.rol}</span></div><button class="linkbtn" style="width:auto;padding:6px" id="logout" title="Cerrar sesión" aria-label="Cerrar sesión">${I.out}</button></div>
@@ -114,6 +115,7 @@
     vehiculos: ["Vehículos", () => `${S.vehicles.length} vehículos en la flota`],
     clientes: ["Clientes", () => `${S.customers.length} clientes registrados`],
     conversaciones: ["Conversaciones", () => "Chats del sitio web atendidos por la IA y el equipo"],
+    antecedentes: ["Antecedentes", () => "Cédulas de clientes y personal en la Procuraduría"],
     ajustes: ["Ajustes", () => "Requisitos, pre-reservas, integraciones y seguridad"],
   };
   function renderTop() {
@@ -159,14 +161,14 @@
   /* ---------- Router ---------- */
   function route() {
     const h = location.hash.replace("#", "") || "resumen";
-    state.view = TITLES[h] ? h : "resumen";
+    state.view = TITLES[h] && (h !== "antecedentes" || isAdmin()) ? h : "resumen";
     renderSide(); render();
     window.scrollTo(0, 0);
   }
   function render() {
     renderTop();
     const v = $("#view");
-    ({ resumen: viewResumen, reservas: viewReservas, calendario: viewCalendario, vehiculos: viewVehiculos, clientes: viewClientes, conversaciones: viewConversaciones, ajustes: viewAjustes })[state.view](v);
+    ({ resumen: viewResumen, reservas: viewReservas, calendario: viewCalendario, vehiculos: viewVehiculos, clientes: viewClientes, conversaciones: viewConversaciones, antecedentes: viewAntecedentes, ajustes: viewAjustes })[state.view](v);
   }
 
   /* =================== RESUMEN =================== */
@@ -362,6 +364,8 @@
             on("#aReturn", () => act("devolver", { id: r.id }, "Devolución registrada · alquiler finalizado").then((x) => x && draw()));
             on("#aCancel", () => RR.confirm(`Cancelar ${r.codigo}`, "El vehículo queda libre para esas fechas. Esta acción queda registrada en la auditoría.", "Cancelar reserva", () => act("cancelar", { id: r.id }, "Reserva cancelada").then((x) => x && draw()), true));
       bindVerif(root, c, draw);
+      const bp = $("#dcProcu", root);
+      if (bp) bp.addEventListener("click", () => { d.close(); consultarAntecedentes("cliente", c.id); });
       $$("[data-cli]", root).forEach((el) => el.addEventListener("click", () => { d.close(); openCustomer(el.dataset.cli); }));
       $$("[data-conv]", root).forEach((el) => el.addEventListener("click", () => { d.close(); state.convSel = el.dataset.conv; location.hash = "conversaciones"; }));
       $$("[data-close]", root).forEach((b) => b.addEventListener("click", d.close));
@@ -624,6 +628,275 @@
     bindOpeners(v);
   }
 
+  /* =================== ANTECEDENTES (Procuraduría) =================== */
+  // La consulta la hace una persona del equipo en la página oficial (ella responde la pregunta del sitio).
+  // El panel copia la cédula, abre la página y lee el resultado que se pega o el certificado que se sube.
+  const URL_PROCU = "https://apps.procuraduria.gov.co/webcert/inicio.aspx";
+  const ANT = {
+    limpio: ["Sin antecedentes", "b-ok", "LIMPIO", "C6EFCE"],
+    con_antecedentes: ["Con antecedentes", "b-danger", "CON ANTECEDENTES", "FFC7CE"],
+    no_encontrado: ["No encontrado", "b-warn", "NO ENCONTRADO", "FFEB9C"],
+    revisar: ["Por revisar", "b-warn", "REVISAR MANUALMENTE", "DDEBF7"],
+  };
+  // RR.confirm usa callback; si se cancela, la promesa simplemente no se resuelve.
+  const pregunta = (t, x, ok, danger) => new Promise((res) => RR.confirm(t, x, ok, () => res(true), danger));
+  const docNum = (d) => String(d || "").replace(/\D/g, "");
+  const antBadge = (c) => (c ? `<span class="badge ${ANT[c.estado][1]}">${ANT[c.estado][0]}</span>` : `<span class="badge plain b-neutral">Sin consultar</span>`);
+  const ultimaConsulta = (tipo, id) => (S.consultas || []).find((x) => x[tipo] === id);
+  function sujetos() {
+    return [
+      ...S.customers.map((c) => ({ tipo: "cliente", id: c.id, nombre: c.nombre, doc: docNum(c.doc), rol: "Cliente", tel: c.tel || "", consent: !!c.consent?.antecedentes })),
+      ...(S.personal || []).map((p) => ({ tipo: "personal", id: p.id, nombre: p.nombre, doc: p.doc, rol: p.cargo || "Personal", tel: p.tel || "", consent: false })),
+    ].map((s) => ({ ...s, ult: ultimaConsulta(s.tipo, s.id) }));
+  }
+  const sujetoDe = (tipo, id) => sujetos().find((s) => s.tipo === tipo && s.id === id);
+  const ANT_TABS = [
+    ["todos", "Todos", () => true],
+    ["sin", "Sin consultar", (s) => !s.ult],
+    ["novedad", "Con novedad", (s) => s.ult && s.ult.estado !== "limpio"],
+    ["personal", "Personal", (s) => s.tipo === "personal"],
+    ["clientes", "Clientes", (s) => s.tipo === "cliente"],
+  ];
+
+  function viewAntecedentes(v) {
+    const todos = sujetos();
+    const tab = ANT_TABS.find((t) => t[0] === state.antTab) || ANT_TABS[0];
+    const q = state.antQ.toLowerCase();
+    const rows = todos.filter(tab[2]).filter((s) => !q || [s.nombre, s.doc, s.rol].join(" ").toLowerCase().includes(q))
+      .sort((a, b) => (!a.ult) - (!b.ult) ? (!b.ult) - (!a.ult) : a.nombre.localeCompare(b.nombre));
+    const hist = (S.consultas || []).slice(0, 30);
+    const quien = (c) => (c.cliente ? cust(c.cliente).nombre : (S.personal || []).find((p) => p.id === c.personal)?.nombre || "Persona retirada");
+    v.innerHTML = `
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head"><h3>Antecedentes en la Procuraduría</h3><span class="badge b-ok">Gratis · página oficial</span></div>
+        <div class="stack" style="padding:16px 20px">
+          <p class="small muted" style="max-width:75ch">Valida la cédula de clientes y del personal. Una persona del equipo hace la consulta en la página oficial y el panel lee el resultado: separa nombres y apellidos, revisa que la cédula y el nombre coincidan y guarda el soporte con fecha y quién consultó.</p>
+          <div class="ant-steps">
+            <div><b>1</b><span>Pulsa <b>Consultar</b>: se copia la cédula y se abre la Procuraduría.</span></div>
+            <div><b>2</b><span>Pega la cédula, responde la pregunta del sitio y pulsa Consultar.</span></div>
+            <div><b>3</b><span>En el resultado presiona <b>Ctrl+A</b> y <b>Ctrl+C</b>, o descarga el certificado PDF.</span></div>
+            <div><b>4</b><span>Pégalo o súbelo en el panel y guarda.</span></div>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary" id="anAdd">${I.plus}Agregar persona del personal</button>
+            <button class="btn" id="anImp">${I.doc}Importar lista (CSV o Excel)</button>
+            <button class="btn" id="anXls">${I.out}Descargar reporte Excel</button>
+            <input type="file" id="anImpFile" accept=".csv,.txt,.xlsx,.xls" hidden>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="tabs" style="padding:0 12px">${ANT_TABS.map(([k, l, f]) => `<button data-t="${k}" class="${tab[0] === k ? "active" : ""}">${l}<span class="count">${todos.filter(f).length}</span></button>`).join("")}</div>
+        <div class="toolbar"><div class="search-in">${I.search}<input class="input" id="antQ" placeholder="Buscar por nombre, cédula o cargo" value="${esc(state.antQ)}"></div><span class="grow"></span><span class="xs subtle">${rows.length} personas</span></div>
+        <div class="table-wrap"><table class="table"><thead><tr><th>Persona</th><th>Tipo</th><th>Cédula</th><th>Resultado</th><th>Nombre en el certificado</th><th>Consultado</th><th></th></tr></thead>
+        <tbody>${rows.map((s) => `<tr>
+          <td><div class="cell-main">${esc(s.nombre)}</div><div class="cell-sub">${esc(s.tel || "")}</div></td>
+          <td><span class="badge plain ${s.tipo === "personal" ? "b-brand" : "b-neutral"}">${esc(s.rol)}</span></td>
+          <td class="mono small">${esc(s.doc || "—")}</td>
+          <td>${antBadge(s.ult)}${s.ult && s.ult.coincideNombre === false ? ' <span class="badge b-danger">Nombre distinto</span>' : ""}</td>
+          <td class="small">${s.ult && s.ult.nombre ? esc(s.ult.nombre) : '<span class="subtle">—</span>'}</td>
+          <td class="small muted">${s.ult ? RR.relTime(s.ult.fecha) : "—"}</td>
+          <td style="text-align:right;white-space:nowrap"><button class="btn btn-sm ${s.ult ? "" : "btn-primary"}" data-ant="${s.tipo}:${s.id}">${I.shield}${s.ult ? "Consultar de nuevo" : "Consultar"}</button>${s.tipo === "personal" ? ` <button class="btn btn-sm btn-ghost btn-icon" data-quitar="${s.id}" title="Quitar del personal" aria-label="Quitar del personal">${I.x}</button>` : ""}</td></tr>`).join("")}</tbody></table>
+        ${rows.length ? "" : '<div class="empty">No hay personas en esta lista.</div>'}</div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-head"><h3>Historial de consultas</h3><span class="xs subtle">Últimas ${hist.length}</span></div>
+        ${hist.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Persona</th><th>Cédula</th><th>Resultado</th><th>Detalle</th><th>Consultó</th><th>Soporte</th></tr></thead>
+        <tbody>${hist.map((c) => `<tr><td class="small">${RR.fmtDT(c.fecha)}</td><td class="small">${esc(quien(c))}</td><td class="mono small">${esc(c.doc)}</td><td>${antBadge(c)}</td>
+          <td class="xs muted" style="max-width:340px">${esc(c.detalle)}</td><td class="small">${esc(c.actor)}</td>
+          <td>${c.archivo ? `<a class="small" style="color:var(--brand);font-weight:600" href="/api/admin/antecedentes/${c.id}" target="_blank" rel="noopener">${c.archivo.tipo === "application/pdf" ? "Ver PDF" : "Ver captura"}</a>` : '<span class="xs subtle">Texto</span>'}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty">Todavía no hay consultas.</div>'}
+      </div>`;
+    $$(".tabs button", v).forEach((b) => b.addEventListener("click", () => { state.antTab = b.dataset.t; viewAntecedentes(v); }));
+    const qi = $("#antQ", v);
+    qi.addEventListener("input", () => { state.antQ = qi.value; const p = qi.selectionStart; viewAntecedentes(v); const n = $("#antQ", v); n.focus(); n.setSelectionRange(p, p); });
+    $$("[data-ant]", v).forEach((b) => b.addEventListener("click", () => { const [t, i] = b.dataset.ant.split(":"); consultarAntecedentes(t, i); }));
+    $$("[data-quitar]", v).forEach((b) => b.addEventListener("click", async () => {
+      const p = (S.personal || []).find((x) => x.id === b.dataset.quitar);
+      if (p && (await pregunta(`¿Quitar a ${p.nombre} del personal?`, "Sus consultas anteriores se conservan en el historial.", "Quitar", true))) { await act("quitar_personal", { id: p.id }, "Persona quitada"); refresh(); }
+    }));
+    $("#anAdd", v).addEventListener("click", agregarPersonal);
+    $("#anImp", v).addEventListener("click", () => $("#anImpFile", v).click());
+    $("#anImpFile", v).addEventListener("change", (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) importarLista(f); });
+    $("#anXls", v).addEventListener("click", () => reporteExcel(rows));
+  }
+
+  /* ---------- Utilidades de archivos (librerías cargadas solo cuando se usan) ---------- */
+  const scripts = {};
+  const cargarScript = (src) => (scripts[src] ||= new Promise((ok, ko) => {
+    const s = document.createElement("script"); s.src = src; s.onload = ok;
+    s.onerror = () => { delete scripts[src]; ko(new Error("No se pudo cargar un componente. Revisa la conexión a internet.")); };
+    document.head.appendChild(s);
+  }));
+  async function textoDePdf(file) {
+    await cargarScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    let out = "";
+    for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
+      const tc = await (await pdf.getPage(i)).getTextContent();
+      out += tc.items.map((it) => it.str + (it.hasEOL ? "\n" : " ")).join("") + "\n";
+    }
+    return out;
+  }
+  const base64De = (file) => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = () => ko(new Error("No se pudo leer el archivo")); r.readAsDataURL(file); });
+  function descargar(blob, nombre) {
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nombre;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
+  /* ---------- Consultar a una persona ---------- */
+  function consultarAntecedentes(tipo, id) {
+    const s = sujetoDe(tipo, id); if (!s) return;
+    let archivo = null, texto = "", lectura = null, temp = null;
+    const pideAut = !s.consent;
+    const m = RR.openModal(`<div class="modal-head"><div><h2>Antecedentes · ${esc(s.nombre)}</h2><div class="xs subtle" style="margin-top:4px">${esc(s.rol)} · Procuraduría General de la Nación</div></div><button class="btn btn-ghost btn-icon" data-close aria-label="Cerrar">${I.x}</button></div>
+      <div class="modal-body stack">
+        <div class="ant-box"><div class="ant-n">1</div><div class="grow stack" style="gap:8px">
+          <div>Consulta la cédula <b class="mono" style="font-size:16px">${esc(s.doc)}</b> en la página oficial.</div>
+          <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" id="anOpen">${I.link}Copiar cédula y abrir Procuraduría</button><button class="btn btn-sm" id="anCopy">Copiar cédula</button></div>
+          <div class="xs subtle">Allí elige «Cédula de ciudadanía», pega la cédula, responde la pregunta y pulsa Consultar.</div></div></div>
+        <div class="ant-box"><div class="ant-n">2</div><div class="grow stack" style="gap:8px">
+          <div>Copia el resultado: en esa página presiona <b>Ctrl+A</b> y <b>Ctrl+C</b> y pégalo aquí. También puedes subir el certificado PDF.</div>
+          <textarea class="textarea" id="anTxt" rows="4" placeholder="Pega aquí la página de resultados…"></textarea>
+          <label class="ant-drop" id="anDrop"><input type="file" id="anFile" accept="application/pdf,image/png,image/jpeg,image/webp" hidden>${I.doc}<span id="anFileTxt">Arrastra el certificado PDF o una captura, o haz clic para elegirlo</span></label></div></div>
+        <div id="anRes"></div>
+        ${pideAut ? `<label class="check"><input type="checkbox" id="anAut"><span>Confirmo que ${s.tipo === "cliente" ? "el cliente" : "la persona"} autorizó consultar sus antecedentes (Ley 1581 de 2012). Quedará registrado a mi nombre.</span></label>` : ""}
+      </div>
+      <div class="modal-foot"><button class="btn" data-close>Cancelar</button><button class="btn btn-success" id="anSave" disabled>${I.check}Guardar resultado</button></div>`);
+    m.el.querySelector(".modal").style.maxWidth = "620px";
+    const copiar = () => navigator.clipboard?.writeText(s.doc).then(() => RR.toast(`Cédula ${s.doc} copiada`), () => {});
+    $("#anCopy", m.el).addEventListener("click", copiar);
+    $("#anOpen", m.el).addEventListener("click", () => { copiar(); window.open(URL_PROCU, "_blank", "noopener"); });
+    const listo = () => { $("#anSave", m.el).disabled = !(lectura && lectura.coincide_documento && (!pideAut || $("#anAut", m.el).checked)); };
+    if (pideAut) $("#anAut", m.el).addEventListener("change", listo);
+
+    function pintar(l) {
+      const r = $("#anRes", m.el);
+      if (!l) { r.innerHTML = ""; return; }
+      const [lab, cls] = ANT[l.estado];
+      const fila = (k, val) => `<dt>${k}</dt><dd>${val || '<span class="subtle">—</span>'}</dd>`;
+      r.innerHTML = `<div class="ant-result ${cls}">
+        <div class="row between" style="gap:8px;flex-wrap:wrap"><b>Resultado leído</b><span class="badge ${cls}">${lab}</span></div>
+        <dl class="kv" style="margin-top:10px">${fila("Primer nombre", esc(l.primer_nombre))}${fila("Segundo nombre", esc(l.segundo_nombre))}${fila("Primer apellido", esc(l.primer_apellido))}${fila("Segundo apellido", esc(l.segundo_apellido))}
+          ${fila("Cédula", l.documento ? `<span class="mono">${esc(l.documento)}</span> ${l.coincide_documento ? '<span class="badge b-ok">Coincide</span>' : '<span class="badge b-danger">No coincide</span>'}` : "")}
+          ${fila("Nombre registrado", esc(s.nombre) + (l.coincide_nombre === true ? ' <span class="badge b-ok">Coincide</span>' : l.coincide_nombre === false ? ' <span class="badge b-danger">No coincide</span>' : ""))}
+          ${l.fecha_consulta ? fila("Fecha de consulta", esc(l.fecha_consulta)) : ""}</dl>
+        <p class="xs muted" style="margin-top:8px">${esc(l.detalle)}</p>
+        ${s.tipo === "cliente" && l.estado === "limpio" && l.coincide_nombre !== false ? '<p class="xs" style="margin-top:6px">Al guardar, el requisito «Antecedentes» del cliente quedará verificado.</p>' : ""}
+        ${l.estado === "con_antecedentes" ? '<p class="xs" style="margin-top:6px">Nada se rechaza automáticamente: revisa el certificado y decide tú.</p>' : ""}</div>`;
+    }
+    async function leer() {
+      clearTimeout(temp);
+      if (texto.trim().length < 10) { lectura = null; pintar(null); listo(); return; }
+      try {
+        const r = await RR.api("/api/admin/accion", { tipo: "leer_antecedentes", sujeto: s.tipo, id: s.id, texto: texto.slice(0, 60000) });
+        lectura = r.lectura; pintar(lectura);
+      } catch (e) { lectura = null; $("#anRes", m.el).innerHTML = `<div class="callout err">${I.alert}<span>${esc(e.message)}</span></div>`; }
+      listo();
+    }
+    $("#anTxt", m.el).addEventListener("input", (e) => { texto = e.target.value; clearTimeout(temp); temp = setTimeout(leer, 350); });
+    async function usarArchivo(f) {
+      if (f.size > 2 * 1024 * 1024) { RR.toast("El archivo supera 2 MB", true); return; }
+      archivo = { nombre: f.name, tipo: f.type, base64: await base64De(f) };
+      $("#anFileTxt", m.el).textContent = `Adjunto: ${f.name}`;
+      if (f.type === "application/pdf") {
+        $("#anRes", m.el).innerHTML = '<div class="xs subtle">Leyendo el PDF…</div>';
+        try { texto = await textoDePdf(f); $("#anTxt", m.el).value = texto.trim(); leer(); }
+        catch (e) { $("#anRes", m.el).innerHTML = `<div class="callout warn">${I.alert}<span>${esc(e.message)} Pega el texto de la página de resultados.</span></div>`; }
+      } else if (!texto) {
+        $("#anRes", m.el).innerHTML = `<div class="callout warn">${I.alert}<span>La captura queda como soporte. Pega también el texto de la página (Ctrl+A, Ctrl+C) para leer el resultado.</span></div>`;
+      }
+    }
+    const drop = $("#anDrop", m.el);
+    $("#anFile", m.el).addEventListener("change", (e) => e.target.files[0] && usarArchivo(e.target.files[0]));
+    ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+    ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+    drop.addEventListener("drop", (e) => e.dataTransfer.files[0] && usarArchivo(e.dataTransfer.files[0]));
+
+    $("#anSave", m.el).addEventListener("click", async () => {
+      const b = $("#anSave", m.el); b.disabled = true; b.textContent = "Guardando…";
+      const r = await act("guardar_antecedentes", { sujeto: s.tipo, id: s.id, texto: texto.slice(0, 60000), autorizado: pideAut ? $("#anAut", m.el).checked : false, ...(archivo ? { archivo } : {}) });
+      if (r) { m.close(); RR.toast(`${ANT[r.lectura.estado][0]} · ${s.nombre}${r.marcado ? " · requisito verificado" : ""}`); refresh(); }
+      else { b.disabled = false; b.innerHTML = `${I.check}Guardar resultado`; }
+    });
+    setTimeout(() => $("#anTxt", m.el).focus(), 50);
+  }
+
+  /* ---------- Personal ---------- */
+  function agregarPersonal() {
+    const m = RR.openModal(`<div class="modal-head"><h2>Agregar persona del personal</h2><button class="btn btn-ghost btn-icon" data-close aria-label="Cerrar">${I.x}</button></div>
+      <form class="modal-body stack" id="pfForm">
+        <div class="field"><label for="pfNom">Nombre completo</label><input class="input" id="pfNom" required maxlength="120"></div>
+        <div class="field"><label for="pfDoc">Cédula</label><input class="input" id="pfDoc" required inputmode="numeric" maxlength="15"></div>
+        <div class="field"><label for="pfCar">Cargo</label><input class="input" id="pfCar" maxlength="60" placeholder="Ej.: conductor, asesor, lavado"></div>
+        <div class="field"><label for="pfTel">Celular (opcional)</label><input class="input" id="pfTel" maxlength="20" inputmode="tel"></div>
+      </form>
+      <div class="modal-foot"><button class="btn" data-close>Cancelar</button><button class="btn btn-primary" id="pfOk">Guardar</button></div>`);
+    m.el.querySelector(".modal").style.maxWidth = "460px";
+    const guardar = async () => {
+      const d = { nombre: $("#pfNom", m.el).value.trim(), documento: $("#pfDoc", m.el).value.trim(), cargo: $("#pfCar", m.el).value.trim(), telefono: $("#pfTel", m.el).value.trim() || undefined };
+      if (d.nombre.length < 3 || docNum(d.documento).length < 5) { RR.toast("Escribe el nombre y una cédula válida", true); return; }
+      if (await act("guardar_personal", d, `${d.nombre} agregado al personal`)) { m.close(); state.antTab = "personal"; refresh(); }
+    };
+    $("#pfOk", m.el).addEventListener("click", guardar);
+    $("#pfForm", m.el).addEventListener("submit", (e) => { e.preventDefault(); guardar(); });
+    setTimeout(() => $("#pfNom", m.el).focus(), 50);
+  }
+
+  async function importarLista(file) {
+    let filas = [];
+    try {
+      if (/\.xlsx?$/i.test(file.name)) {
+        await cargarScript("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js");
+        const wb = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
+        filas = window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: "" });
+      } else {
+        const txt = await file.text();
+        const sep = [";", "\t", ","].find((c) => txt.split(/\r?\n/)[0].includes(c)) || ",";
+        filas = txt.split(/\r?\n/).filter((l) => l.trim()).map((l) => l.split(sep).map((x) => x.trim().replace(/^"|"$/g, "")));
+      }
+    } catch (e) { RR.toast(e.message || "No se pudo leer el archivo", true); return; }
+    if (!filas.length) { RR.toast("El archivo está vacío", true); return; }
+    // Encabezados: busca columnas de cédula, nombre y cargo; si no hay encabezado, la primera columna es la cédula.
+    const enc = filas[0].map((h) => String(h).toLowerCase());
+    const conEnc = enc.some((h) => /c[eé]dula|documento|^id$|nombre|cargo/.test(h));
+    const col = (re, def) => { const i = enc.findIndex((h) => re.test(h)); return i >= 0 ? i : def; };
+    const cDoc = conEnc ? col(/c[eé]dula|documento|^id$|identificaci/, 0) : 0, cNom = conEnc ? col(/nombre/, -1) : -1, cCar = conEnc ? col(/cargo/, -1) : -1;
+    const lista = (conEnc ? filas.slice(1) : filas).map((f) => ({ documento: docNum(f[cDoc]), nombre: cNom >= 0 ? String(f[cNom] || "").trim() || undefined : undefined, cargo: cCar >= 0 ? String(f[cCar] || "").trim() || undefined : undefined }))
+      .filter((f) => f.documento.length >= 5 && f.documento.length <= 15);
+    const unicos = [...new Map(lista.map((f) => [f.documento, f])).values()].slice(0, 500);
+    const clientes = new Set(S.customers.map((c) => docNum(c.doc)));
+    const nuevos = unicos.filter((f) => !clientes.has(f.documento));
+    if (!nuevos.length) { RR.toast(unicos.length ? "Esas cédulas ya están registradas como clientes" : "No se encontraron cédulas válidas en el archivo", true); return; }
+    if (!(await RR.confirm(`¿Importar ${nuevos.length} cédula(s) al personal?`, `Se leyeron de «${file.name}».${unicos.length - nuevos.length ? ` ${unicos.length - nuevos.length} ya son clientes y se omiten.` : ""} Las que no traen nombre quedan como «Por identificar» y toman el nombre del certificado al consultarlas.`, "Importar"))) return;
+    const r = await act("importar_personal", { filas: nuevos });
+    if (r) { RR.toast(`${r.nuevos} nueva(s) · ${r.total - r.nuevos} ya estaban`); state.antTab = "sin"; refresh(); }
+  }
+
+  /* ---------- Reporte Excel (mismas columnas y colores del programa de consulta masiva) ---------- */
+  async function reporteExcel(rows) {
+    try { await cargarScript("https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"); }
+    catch (e) { RR.toast(e.message, true); return; }
+    const wb = new window.ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Antecedentes");
+    ws.columns = [
+      ["Cédula", 16], ["Primer Nombre", 18], ["Segundo Nombre", 18], ["Primer Apellido", 18], ["Segundo Apellido", 18], ["Nombre Completo", 34],
+      ["Tipo", 16], ["Estado Disciplinario", 22], ["Coincide nombre", 16], ["Detalle del Resultado", 50], ["Consultó", 24], ["Fecha y Hora", 20],
+    ].map(([header, width]) => ({ header, width }));
+    rows.forEach((s) => {
+      const c = s.ult;
+      const fila = ws.addRow([s.doc, ...(c ? c.nombres : ["", "", "", ""]), c?.nombre || s.nombre, s.rol, c ? ANT[c.estado][2] : "SIN CONSULTAR",
+        c ? (c.coincideNombre === true ? "Sí" : c.coincideNombre === false ? "No" : "—") : "", c?.detalle || "", c?.actor || "", c ? new Date(c.fecha).toLocaleString("es-CO") : ""]);
+      const color = c ? ANT[c.estado][3] : "F2F2F2";
+      fila.eachCell({ includeEmpty: true }, (cell) => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF" + color } }; cell.alignment = { wrapText: true, vertical: "top" }; });
+    });
+    ws.getRow(1).eachCell((cell) => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F2C59" } }; cell.font = { bold: true, color: { argb: "FFFFFFFF" } }; cell.alignment = { horizontal: "center", vertical: "middle" }; });
+    ws.views = [{ state: "frozen", ySplit: 1 }];
+    const buf = await wb.xlsx.writeBuffer();
+    descargar(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `antecedentes_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    RR.toast(`Reporte con ${rows.length} persona(s) descargado`);
+  }
+
   function openCustomer(id) {
     let c = RR.get.customer(id); if (!c) return;
     const d = RR.openModal(`<div id="dc"></div>`, { drawer: true, onClose: refresh });
@@ -645,7 +918,9 @@
             <div class="verif-row"><span>Seguimiento comercial</span>${c.consent?.marketing ? `<span class="badge b-ok">Otorgado</span>` : `<span class="badge b-neutral">No otorgado</span>`}</div>
             <div class="verif-row"><span>Consulta de antecedentes y licencia</span>${c.consent?.antecedentes ? `<span class="badge b-ok">Otorgado</span>` : `<span class="badge b-neutral">No otorgado</span>`}</div></div>
           ${isAdmin() ? `<div class="dsec"><h4>Verificación con fuentes oficiales</h4>
-            ${S.verifikActivo ? `<button class="btn btn-sm" id="dcVerif">${I.shield}Verificar licencia y antecedentes</button><p class="xs subtle" style="margin-top:6px">Consulta RUNT, Policía y Procuraduría vía Verifik. Solo marca como verificado lo que la fuente confirma; lo demás queda para tu revisión.</p>` : `<p class="xs subtle">No configurada: falta VERIFIK_TOKEN en el servidor.</p>`}
+            ${S.verifikActivo ? `<button class="btn btn-sm" id="dcVerif">${I.shield}Verificar licencia y antecedentes</button><p class="xs subtle" style="margin-top:6px">Consulta RUNT, Policía y Procuraduría vía Verifik. Solo marca como verificado lo que la fuente confirma; lo demás queda para tu revisión.</p>` : `<p class="xs subtle">Consulta automática (Verifik) no configurada.</p>`}
+            <button class="btn btn-sm" id="dcProcu" style="margin-top:8px">${I.shield}Consultar en la Procuraduría (gratis)</button>
+            ${(() => { const u = ultimaConsulta("cliente", c.id); return u ? `<div class="xs subtle" style="margin-top:6px">Última consulta en la Procuraduría: ${antBadge(u)} ${RR.relTime(u.fecha)}</div>` : ""; })()}
             ${(() => { const vs = (S.verificaciones || []).filter((x) => x.cliente === c.id); const col = { ok: "b-ok", hallazgo: "b-danger", no_encontrado: "b-warn", error: "b-warn", no_aplica: "b-neutral" }; const lab = { ok: "Sin novedad", hallazgo: "Revisar", no_encontrado: "Sin datos", error: "Falló", no_aplica: "No aplica" };
               return vs.length ? `<div style="margin-top:10px">${vs.slice(0, 8).map((x) => `<div class="verif-row" style="align-items:flex-start"><div><b class="small">${esc(x.fuente)}</b><div class="xs muted">${esc(x.detalle)}</div><div class="xs subtle">${esc(x.actor)} · ${RR.relTime(x.fecha)}</div></div><span class="badge ${col[x.resultado]}">${lab[x.resultado]}</span></div>`).join("")}</div>` : ""; })()}
           </div>` : ""}
@@ -654,6 +929,8 @@
         </div>
         <div class="drawer-foot"><button class="btn btn-primary" id="dcNew">${I.plus}Nueva reserva para este cliente</button></div>`;
       bindVerif(root, c, draw);
+      const bp = $("#dcProcu", root);
+      if (bp) bp.addEventListener("click", () => { d.close(); consultarAntecedentes("cliente", c.id); });
       const bv = $("#dcVerif", root);
       if (bv) bv.addEventListener("click", () => {
         const correr = async (autorizado) => {
@@ -748,7 +1025,7 @@
           <div class="set-row"><div><b>Depósito o garantía</b><div class="xs subtle">Monto definido por vehículo</div></div>${sw("sDep", st.depositoObligatorio)}</div>
           <div class="set-row"><div><b>Experiencia mínima</b><div class="xs subtle">Años con licencia (si aplica)</div></div><div class="row">${sw("sExpOn", st.experienciaActiva)}<input class="input" type="number" id="sExp" value="${st.experienciaMin}" min="0" max="10" style="width:70px" ${dis}></div></div>
           <div class="set-row"><div><b>Documentación adicional</b><div class="xs subtle">Ej.: recibo de servicio público</div></div>${sw("sDoc", st.docAdicional)}</div>
-          <div class="set-row"><div><b>Exigir antecedentes verificados</b><div class="xs subtle">${S.verifikActivo ? "Para aprobar, el cliente debe tener antecedentes verificados (consulta automática con su autorización, o revisión manual)." : "Requiere configurar Verifik (VERIFIK_TOKEN)."}</div></div>${S.verifikActivo ? sw("sAnt", st.antecedentesActiva) : '<span class="badge b-neutral">No disponible</span>'}</div>
+          <div class="set-row"><div><b>Exigir antecedentes verificados</b><div class="xs subtle">Para aprobar, el cliente debe tener antecedentes verificados: consulta gratis en la Procuraduría desde la sección Antecedentes${S.verifikActivo ? ", o automática con Verifik" : ""}.</div></div>${sw("sAnt", st.antecedentesActiva)}</div>
         </div>
         <div class="card"><div class="card-head"><h3>Pre-reservas y recordatorios</h3></div>
           <div class="set-row"><div><b>Vencimiento de pre-reserva</b><div class="xs subtle">Tiempo que una solicitud bloquea el vehículo</div></div><select class="select" id="sPre" ${dis}>${[6, 12, 24, 48].map((h) => `<option value="${h}" ${st.prereservaHoras === h ? "selected" : ""}>${h} horas</option>`).join("")}</select></div>
