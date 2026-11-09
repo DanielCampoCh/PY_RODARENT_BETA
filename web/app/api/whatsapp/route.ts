@@ -22,17 +22,23 @@ type WaCambio = { value?: { messages?: WaMensaje[]; contacts?: { wa_id: string; 
 /** Mensajes entrantes. Responde 200 de inmediato y procesa después (Meta reintenta si tardamos). */
 export async function POST(req: Request) {
   const raw = await req.text();
-  if (!waConfig().activo) return new NextResponse("WhatsApp no configurado", { status: 503 });
-  if (!firmaValida(raw, req.headers.get("x-hub-signature-256"))) return new NextResponse("Firma inválida", { status: 401 });
+  if (!waConfig().activo) { console.warn("[whatsapp] Llegó un aviso pero faltan variables WHATSAPP_*"); return new NextResponse("WhatsApp no configurado", { status: 503 }); }
+  if (!firmaValida(raw, req.headers.get("x-hub-signature-256"))) {
+    console.warn(`[whatsapp] Firma inválida (cabecera ${req.headers.get("x-hub-signature-256") ? "presente" : "ausente"}). Revisa que WHATSAPP_APP_SECRET sea la clave secreta de ESTA app de Meta.`);
+    return new NextResponse("Firma inválida", { status: 401 });
+  }
 
-  let body: { entry?: { changes?: WaCambio[] }[] };
+  let body: { entry?: { changes?: (WaCambio & { field?: string })[] }[] };
   try { body = JSON.parse(raw); } catch { return new NextResponse("JSON inválido", { status: 400 }); }
 
   const pendientes: { msg: WaMensaje; nombre?: string }[] = [];
+  let estados = 0;
   for (const e of body.entry ?? []) for (const ch of e.changes ?? []) {
     const contactos = ch.value?.contacts ?? [];
+    estados += ((ch.value as { statuses?: unknown[] } | undefined)?.statuses ?? []).length;
     for (const m of ch.value?.messages ?? []) pendientes.push({ msg: m, nombre: contactos.find((c) => c.wa_id === m.from)?.profile?.name });
   }
+  console.log(`[whatsapp] Aviso recibido: ${pendientes.length} mensaje(s)${pendientes.map((p) => ` de …${p.msg.from.slice(-4)} (${p.msg.type})`).join(",")}, ${estados} estado(s)`);
   if (pendientes.length) after(async () => { for (const p of pendientes) await enCola(p.msg.from, () => procesar(p.msg, p.nombre)); });
   return NextResponse.json({ ok: true });
 }
@@ -76,9 +82,12 @@ async function procesar(m: WaMensaje, nombrePerfil?: string) {
       return;
     }
     const r = await atender(conv as unknown as Conv, texto.slice(0, 1500));
-    if (r.respuesta) await enviarTexto(m.from, r.respuesta);
+    if (r.respuesta) {
+      await enviarTexto(m.from, r.respuesta);
+      console.log(`[whatsapp] Respuesta enviada a …${m.from.slice(-4)} (estado: ${r.estado})`);
+    } else console.log(`[whatsapp] Sin respuesta automática para …${m.from.slice(-4)} (conversación con asesor)`);
   } catch (e) {
-    console.error("Error procesando mensaje de WhatsApp", e);
+    console.error(`[whatsapp] Error con el mensaje de …${m.from.slice(-4)}:`, e instanceof Error ? e.message : e);
     await sql`insert into mensajes (conversacion_id, emisor, texto) values (${conv.id}, 'sistema', ${"No se pudo enviar la respuesta por WhatsApp: " + (e instanceof Error ? e.message : "error desconocido")})`;
     await sql`update conversaciones set estado = 'pendiente', no_leidos = no_leidos + 1 where id = ${conv.id}`;
   }
