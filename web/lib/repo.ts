@@ -97,13 +97,19 @@ export const mismoTel = (a?: string | null, b?: string | null) => !!a && !!b && 
  * Crea o reutiliza un cliente por documento. Si el documento ya existe con otro teléfono,
  * no se modifica (podría ser suplantación) y se devuelve conflicto.
  */
-export async function upsertCliente(d: DatosCliente): Promise<{ ok: true; cliente: Row } | { ok: false; error: string }> {
+export async function upsertCliente(d: DatosCliente): Promise<{ ok: true; cliente: Row; alerta?: string } | { ok: false; error: string }> {
   const documento = normalizarDoc(d.documento);
   const telefono = normalizarTel(d.telefono);
   const [existe] = await db()`select * from clientes where documento = ${documento}`;
   if (existe) {
     if (existe.telefono && !mismoTel(existe.telefono, telefono)) {
-      return { ok: false, error: "Ese documento ya está registrado con otro número de teléfono. Un asesor debe validarlo." };
+      // Puede ser la misma persona con otro celular, o alguien usando un documento ajeno.
+      // Se permite la solicitud, pero NO se tocan sus datos guardados y el contacto vuelve a pendiente
+      // para que una persona confirme la identidad antes de aprobar.
+      const [c] = await db()`update clientes set verificacion = jsonb_set(verificacion, '{contacto}', '"pendiente"') where id = ${existe.id} returning *`;
+      const alerta = `Solicitud hecha desde otro celular (${telefono}); el cliente tiene registrado ${existe.telefono}. Confirmar identidad antes de aprobar.`;
+      await db()`insert into notificaciones (texto) values (${`${existe.nombre}: ${alerta}`})`;
+      return { ok: true, cliente: c, alerta };
     }
     // Si cambian los datos de la licencia, ese requisito debe verificarse de nuevo.
     const fechaLic = existe.licencia_vence ? new Date(existe.licencia_vence).toISOString().slice(0, 10) : null;

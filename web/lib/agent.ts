@@ -162,11 +162,14 @@ async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a
       const origen = esWhatsApp(conv) ? "whatsapp" : "chat";
       const c = await upsertCliente({ nombre, documento, telefono: tel, email: d.email, origen, consentimiento: true });
       if (!c.ok) return err(c.error + " Usa escalar_a_humano.");
-      const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: d.vehiculo_id, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen, notas: d.notas, actor: "Asistente IA" });
+      const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: d.vehiculo_id, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen, notas: [d.notas, c.alerta].filter(Boolean).join(" · "), actor: "Asistente IA" });
       if (!r.ok) return err(r.error);
-      await sql`update conversaciones set cliente_id = ${c.cliente.id}, reserva_id = ${r.reserva.id}, nombre = ${c.cliente.nombre}, telefono = ${c.cliente.telefono} where id = ${conv.id}`;
+      // El teléfono de la conversación no se toca: en WhatsApp es el número desde el que escribe.
+      await sql`update conversaciones set cliente_id = ${c.cliente.id}, reserva_id = ${r.reserva.id}, nombre = ${c.cliente.nombre}, telefono = coalesce(telefono, ${tel}) where id = ${conv.id}`;
       await sql`insert into mensajes (conversacion_id, emisor, texto) values (${conv.id}, 'sistema', ${`Solicitud ${r.reserva.codigo} creada · pre-reserva vence ${fmtFechaHora(r.reserva.expira_en)}`})`;
-      return ok({ codigo: r.reserva.codigo, estado: "pendiente de revisión", total: r.reserva.total, deposito: r.reserva.deposito, prereserva_vence: fmtFechaHora(r.reserva.expira_en), siguiente_paso: "Un asesor verificará cédula, licencia, edad y depósito antes de confirmar." });
+      return ok({ codigo: r.reserva.codigo, estado: "pendiente de revisión", total: r.reserva.total, deposito: r.reserva.deposito, prereserva_vence: fmtFechaHora(r.reserva.expira_en), siguiente_paso: c.alerta
+          ? "Dile que la solicitud quedó registrada y que, como su documento está registrado con otro número de celular, un asesor confirmará su identidad antes de aprobar. No menciones ningún dato del registro anterior (ni nombre ni número)."
+          : "Un asesor verificará cédula, licencia, edad y depósito antes de confirmar." });
     }
     case "verificar_antecedentes": {
       if (!verifikActivo()) return ok({ disponible: false, nota: "La verificación automática no está activa: dile que un asesor revisará sus documentos." });

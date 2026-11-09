@@ -67,7 +67,7 @@ export async function POST(req: Request) {
   });
   if (!c.ok) return NextResponse.json({ error: c.error }, { status: 409 });
 
-  const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: d.vehiculo, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen: "web", notas: d.notas, actor: d.habitual ? "Cliente habitual (web)" : "Cliente (web)" });
+  const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: d.vehiculo, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen: "web", notas: [d.notas, c.alerta].filter(Boolean).join(" · "), actor: d.habitual ? "Cliente habitual (web)" : "Cliente (web)" });
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: 409 });
   const res = r.reserva;
   if (d.verificar && verifikActivo()) {
@@ -75,5 +75,6 @@ export async function POST(req: Request) {
     const clienteId = c.cliente.id as string, fin = new Date(res.fin).toISOString();
     after(async () => { try { await verificarCliente(clienteId, "Verificación automática (web)", fin); } catch (e) { console.error("[verifik]", e instanceof Error ? e.message : e); } });
   }
-  return NextResponse.json({ codigo: res.codigo, inicio: res.inicio, fin: res.fin, total: res.total, expira: res.expira_en, estado: res.estado, nombre: String(c.cliente.nombre).split(" ")[0] });
+  return NextResponse.json({ codigo: res.codigo, inicio: res.inicio, fin: res.fin, total: res.total, expira: res.expira_en, estado: res.estado, // Con celular distinto no se revela el nombre registrado: se usa el que escribió quien reserva.
+    nombre: String(c.alerta ? datos.nombre : c.cliente.nombre).split(" ")[0] });
 }

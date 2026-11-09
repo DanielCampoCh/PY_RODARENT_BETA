@@ -13,7 +13,9 @@ const id = z.string().uuid();
 const fecha = z.string().datetime({ offset: true });
 
 const Accion = z.discriminatedUnion("tipo", [
-  z.object({ tipo: z.literal("aprobar"), id }),
+  // forzar = el administrador aprueba aunque falten requisitos (con motivo, queda en la auditoría).
+  z.object({ tipo: z.literal("aprobar"), id, forzar: z.boolean().optional(), motivo: z.string().trim().max(300).optional() }),
+  z.object({ tipo: z.literal("verificar_todos"), clienteId: id }),
   z.object({ tipo: z.literal("rechazar"), id, motivo: z.string().min(2).max(200) }),
   z.object({ tipo: z.literal("extender"), id }),
   z.object({ tipo: z.literal("entregar"), id }),
@@ -52,7 +54,7 @@ const Accion = z.discriminatedUnion("tipo", [
   }),
 ]);
 
-const SOLO_ADMIN = new Set(["aprobar", "verificar", "guardar_vehiculo", "ajustes", "probar_whatsapp", "verificar_fuentes"]);
+const SOLO_ADMIN = new Set(["aprobar", "verificar_todos", "verificar", "guardar_vehiculo", "ajustes", "probar_whatsapp", "verificar_fuentes"]);
 
 class Fallo extends Error { constructor(m: string, public status = 400) { super(m); } }
 
@@ -93,9 +95,12 @@ async function ejecutar(a: z.infer<typeof Accion>, u: Usuario): Promise<Record<s
       const r = await reserva(a.id);
       const [c] = await sql`select nombre, verificacion from clientes where id = ${r.cliente_id}`;
       const pendientes = requisitosRequeridos(await ajustes()).filter((k) => c.verificacion?.[k] !== "verificado");
-      if (pendientes.length) throw new Fallo(`No se puede aprobar: requisitos sin verificar (${pendientes.join(", ")}).`, 409);
+      const rechazados = pendientes.filter((k) => c.verificacion?.[k] === "rechazado");
+      if (pendientes.length && !a.forzar) throw new Fallo(`No se puede aprobar: requisitos sin verificar (${pendientes.join(", ")}).`, 409);
+      if (rechazados.length) throw new Fallo(`Hay requisitos rechazados (${rechazados.join(", ")}). Cámbialos primero si ya los revisaste.`, 409);
+      if (pendientes.length && (a.motivo ?? "").length < 5) throw new Fallo("Escribe el motivo para aprobar sin completar los requisitos.");
       if (r.expira_en && new Date(r.expira_en) < new Date()) throw new Fallo("La pre-reserva ya venció.", 409);
-      await cambiar(a.id, ["pendiente"], "aprobada", "Requisitos verificados");
+      await cambiar(a.id, ["pendiente"], "aprobada", pendientes.length ? `Aprobada sin completar requisitos (${pendientes.join(", ")}) · Motivo: ${a.motivo}` : "Requisitos verificados");
       await sql`insert into notificaciones (texto) values (${`Confirmación de ${r.codigo} lista para enviar a ${c.nombre} (envío por WhatsApp/correo aún no conectado)`})`;
       return;
     }
@@ -122,6 +127,17 @@ async function ejecutar(a: z.infer<typeof Accion>, u: Usuario): Promise<Record<s
       await log(`Modificó fechas de ${r.codigo}`);
       return;
     }
+    case "verificar_todos": {
+      const [c] = await sql`select nombre, verificacion from clientes where id = ${a.clienteId}`;
+      if (!c) throw new Fallo("Cliente no encontrado", 404);
+      // Solo los pendientes: un "rechazado" se cambia a mano, uno por uno.
+      const marcar = requisitosRequeridos(await ajustes()).filter((k) => (c.verificacion?.[k] ?? "pendiente") === "pendiente");
+      if (!marcar.length) return { marcados: [] };
+      const nuevos = Object.fromEntries(marcar.map((k) => [k, "verificado"]));
+      await sql`update clientes set verificacion = verificacion || ${sql.json(nuevos)}::jsonb where id = ${a.clienteId}`;
+      await log(`Marcó como verificados (manual) los requisitos de ${c.nombre}: ${marcar.join(", ")}`);
+      return { marcados: marcar };
+    }
     case "verificar": {
       const [c] = await sql`select nombre, verificacion from clientes where id = ${a.clienteId}`;
       if (!c) throw new Fallo("Cliente no encontrado", 404);
@@ -132,16 +148,18 @@ async function ejecutar(a: z.infer<typeof Accion>, u: Usuario): Promise<Record<s
     }
     case "crear_reserva": {
       let clienteId = a.clienteId;
+      let alerta: string | undefined;
       if (!clienteId) {
         if (!a.nuevo) throw new Fallo("Elige un cliente o registra uno nuevo.");
         const c = await upsertCliente({ ...a.nuevo, origen: "manual", consentimiento: true });
         if (!c.ok) throw new Fallo(c.error, 409);
         clienteId = c.cliente.id as string;
+        alerta = c.alerta;
       }
       const [c] = await sql`select verificacion from clientes where id = ${clienteId}`;
       const req = requisitosRequeridos(await ajustes());
       const verificado = req.every((k) => c?.verificacion?.[k] === "verificado");
-      const r = await crearReserva({ clienteId, vehiculoId: a.vehiculoId, inicio: a.inicio, fin: a.fin, lugar: a.lugar, origen: "manual", estado: verificado ? "aprobada" : "pendiente", notas: a.notas, actor });
+      const r = await crearReserva({ clienteId, vehiculoId: a.vehiculoId, inicio: a.inicio, fin: a.fin, lugar: a.lugar, origen: "manual", estado: verificado && !alerta ? "aprobada" : "pendiente", notas: [a.notas, alerta].filter(Boolean).join(" · "), actor });
       if (!r.ok) throw new Fallo(r.error, 409);
       return { id: r.reserva.id, codigo: r.reserva.codigo };
     }

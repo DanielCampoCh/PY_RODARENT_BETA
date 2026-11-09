@@ -294,6 +294,8 @@
     })));
   }
 
+  const notaAlerta = (r) => /otro celular/.test(r.notas || "") ? `<div class="callout warn" style="margin-top:10px">${I.alert}<span>Esta solicitud llegó desde un celular distinto al registrado. Confirma que es la misma persona (por ejemplo, llamando al número registrado) antes de aprobar.</span></div>` : "";
+
   /* ---------- Drawer de reserva ---------- */
   function openReservation(id) {
     let r = RR.get.reservation(id); if (!r) return;
@@ -319,6 +321,8 @@
           </div>
           <div class="dsec"><div class="row between" style="margin-bottom:10px"><h4 style="margin:0">Validación de requisitos</h4>${verifBadge(c)}</div>
             ${verifChecklist(c, isAdmin() && ["pendiente", "aprobada"].includes(r.estado))}
+            ${isAdmin() && r.estado === "pendiente" && RR.reqItems().some((it) => ((c.verif || {})[it.key] || "pendiente") === "pendiente") ? `<button class="btn btn-sm" id="aVerifTodos" style="margin-top:10px">${I.check}Marcar todos los pendientes como verificados</button>` : ""}
+            ${notaAlerta(r)}
             ${!isAdmin() ? `<p class="xs subtle" style="margin-top:8px">Solo el administrador puede verificar requisitos y ver documentos.</p>` : ""}
             ${c.docs && Object.keys(c.docs).length ? `<div class="row wrap" style="margin-top:10px">${Object.entries(c.docs).map(([k, n]) => `<button class="btn btn-sm" data-doc="${esc(n)}">${I.doc}${esc(k)}: ${esc(n)}</button>`).join("")}</div>` : `<p class="xs subtle" style="margin-top:8px">${I.doc.replace("<svg", '<svg width="12" height="12" style="display:inline;vertical-align:-1px"')} El cliente aún no ha cargado documentos.</p>`}
           </div>
@@ -330,7 +334,7 @@
       const btn = (id, cls, label, dis) => `<button class="btn ${cls}" id="${id}" ${dis ? "disabled" : ""}>${label}</button>`;
       if (r.estado === "pendiente") {
         foot.innerHTML = (!canApprove ? `<div class="callout ${ov === "rechazado" ? "err" : "warn"}" style="width:100%">${I.shield}<span>${!isAdmin() ? "Solo el administrador puede aprobar reservas." : ov === "rechazado" ? "Hay requisitos rechazados. Esta solicitud no debería aprobarse." : "Para aprobar, todos los requisitos deben estar <b>verificados</b>. La IA nunca aprueba automáticamente."}</span></div>` : "") +
-          btn("aApprove", "btn-success", `${I.check}Aprobar`, !canApprove) + btn("aReject", "btn-danger", `${I.x}Rechazar`) + btn("aDates", "", `${I.cal}Modificar fechas`) + btn("aExtend", "btn-ghost", "+24 h de plazo");
+          btn("aApprove", "btn-success", `${I.check}Aprobar`, !canApprove) + (isAdmin() && !canApprove && ov === "pendiente" ? btn("aForce", "", `${I.shield}Aprobar de todas formas…`) : "") + btn("aReject", "btn-danger", `${I.x}Rechazar`) + btn("aDates", "", `${I.cal}Modificar fechas`) + btn("aExtend", "btn-ghost", "+24 h de plazo");
       } else if (r.estado === "aprobada") {
         foot.innerHTML = btn("aDeliver", "btn-primary", `${I.arrow}Registrar entrega`) + btn("aDates", "", `${I.cal}Modificar fechas`) + btn("aCancel", "btn-danger", "Cancelar");
       } else if (r.estado === "en_curso") {
@@ -338,6 +342,18 @@
       } else foot.innerHTML = `<span class="small muted">Reserva cerrada. No admite cambios.</span>`;
 
       const on = (sel, fn) => { const el = $(sel, root); el && el.addEventListener("click", fn); };
+      on("#aVerifTodos", () => act("verificar_todos", { clienteId: c.id }).then((x) => { if (x) { RR.toast(x.marcados.length ? `Verificados: ${x.marcados.join(", ")}` : "No había pendientes"); draw(); } }));
+      on("#aForce", () => {
+        const faltan = RR.reqItems().filter((it) => (c.verif || {})[it.key] !== "verificado").map((it) => it.label);
+        const m = RR.openModal(`<div class="modal-head"><h2>Aprobar sin completar requisitos</h2></div>
+          <div class="modal-body stack"><p class="muted">Faltan por verificar: <b>${faltan.map(esc).join(", ")}</b>. La aprobación quedará registrada a tu nombre con el motivo.</p>
+          <div class="field"><label for="fzMot">Motivo</label><textarea class="textarea" id="fzMot" placeholder="Ej.: cliente conocido, revisé la cédula en la oficina"></textarea></div></div>
+          <div class="modal-foot"><button class="btn" data-close>Cancelar</button><button class="btn btn-success" id="fzOk" disabled>Aprobar</button></div>`);
+        m.el.querySelector(".modal").style.maxWidth = "480px";
+        const t = $("#fzMot", m.el);
+        t.addEventListener("input", () => ($("#fzOk", m.el).disabled = t.value.trim().length < 5));
+        $("#fzOk", m.el).addEventListener("click", async () => { const x = await act("aprobar", { id: r.id, forzar: true, motivo: t.value.trim() }, `${r.codigo} aprobada`); if (x) { m.close(); draw(); } });
+      });
             on("#aApprove", () => act("aprobar", { id: r.id }, `${r.codigo} aprobada`).then((x) => x && draw()));
       on("#aReject", () => rejectModal(r, draw));
       on("#aDates", () => datesModal(r, draw));
