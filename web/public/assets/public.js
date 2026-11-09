@@ -341,7 +341,7 @@
     burbuja("cliente", texto);
     chat.enviando = true;
     const typing = document.createElement("div"); typing.className = "typing"; typing.innerHTML = "<i></i><i></i><i></i>";
-    if (chat.estado === "ia") { body().appendChild(typing); scroll(); $("#waStatus").textContent = "escribiendo…"; }
+    if (chat.estado !== "humano") { body().appendChild(typing); scroll(); $("#waStatus").textContent = "escribiendo…"; }
     try {
       const d = await RR.api("/api/chat", { conversacion: chat.conv || undefined, mensaje: texto });
       chat.conv = d.conversacion; chat.estado = d.estado;
@@ -350,13 +350,13 @@
       // Trae lo nuevo (respuesta de la IA y avisos del sistema) en orden.
       const n = await RR.api(`/api/chat/${chat.conv}?desde=${chat.ultimoId}`);
       n.mensajes.forEach((m) => { if (m.emisor !== "cliente") burbuja(m.emisor, m.texto, m.fecha); chat.ultimoId = m.id; });
-      if (chat.estado !== "ia" && !n.mensajes.some((m) => m.emisor !== "cliente")) burbuja("sistema", "Un asesor te responderá por aquí en breve.");
+      if (chat.estado === "humano" && !n.mensajes.some((m) => m.emisor !== "cliente")) burbuja("sistema", "Un asesor te responderá por aquí en breve.");
     } catch (err) {
       typing.remove();
       burbuja("sistema", err.message);
     } finally {
       chat.enviando = false;
-      $("#waStatus").textContent = chat.estado === "ia" ? "en línea · asistente virtual" : "en línea · te atiende un asesor";
+      $("#waStatus").textContent = chat.estado !== "humano" ? "en línea · asistente virtual" : "en línea · te atiende un asesor";
     }
   }
 
@@ -369,7 +369,7 @@
         const n = await RR.api(`/api/chat/${chat.conv}?desde=${chat.ultimoId}`);
         chat.estado = n.estado;
         n.mensajes.forEach((m) => { if (m.emisor !== "cliente") burbuja(m.emisor, m.texto, m.fecha); chat.ultimoId = m.id; });
-        $("#waStatus").textContent = chat.estado === "ia" ? "en línea · asistente virtual" : "en línea · te atiende un asesor";
+        $("#waStatus").textContent = chat.estado !== "humano" ? "en línea · asistente virtual" : "en línea · te atiende un asesor";
       } catch (e) { /* reintenta en el siguiente ciclo */ }
     }, 6000);
   }

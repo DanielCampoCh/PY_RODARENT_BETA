@@ -257,7 +257,9 @@ export async function atender(conv: Conv, texto: string): Promise<Resultado> {
       no_leidos = case when estado <> 'ia' then no_leidos + 1 else no_leidos end where id = ${conv.id}`;
   };
 
-  if (conv.estado !== "ia" || !process.env.ANTHROPIC_API_KEY) {
+  // La IA responde mientras ningún asesor haya tomado la conversación (estado "ia" o "pendiente").
+  // Solo se calla cuando un asesor la toma (estado "humano").
+  if (conv.estado === "humano" || !process.env.ANTHROPIC_API_KEY) {
     await guardar();
     const respuesta = conv.estado !== "ia" ? "" : "El asistente automático no está disponible en este momento. Un asesor te responderá pronto.";
     if (conv.estado === "ia") {
@@ -284,6 +286,7 @@ export async function atender(conv: Conv, texto: string): Promise<Resultado> {
       if (!conv.cliente_id) await sql`update conversaciones set cliente_id = ${reg.id}, nombre = ${reg.nombre} where id = ${conv.id}`;
     } else canal += " Este número no está registrado: es un cliente nuevo.";
   }
+  if (conv.estado === "pendiente") canal += " Esta conversación ya fue transferida a un asesor, que está avisado y escribirá pronto. Sigue ayudando con todo lo que puedas (consultas, disponibilidad, precios, nuevas reservas). No vuelvas a transferir por el mismo motivo; si pregunta por lo que quedó pendiente, dile que el asesor ya está al tanto.";
   nuevos.push({ role: "system", content: ahora() + canal } as unknown as Msg);
   historial = [...historial, ...nuevos];
 
@@ -339,7 +342,8 @@ export async function atender(conv: Conv, texto: string): Promise<Resultado> {
 
   const respuesta = textos.join("\n\n") || "¿Me repites, por favor? 😊";
   await sql`insert into mensajes (conversacion_id, emisor, texto) values (${conv.id}, 'ia', ${respuesta})`;
-  await sql`update conversaciones set historial_api = historial_api || ${sql.json(nuevos as never)}::jsonb, ultima_actividad = now() where id = ${conv.id}`;
+  await sql`update conversaciones set historial_api = historial_api || ${sql.json(nuevos as never)}::jsonb, ultima_actividad = now(),
+    no_leidos = case when estado = 'pendiente' then no_leidos + 1 else no_leidos end where id = ${conv.id}`;
   const [k] = await sql`select estado from conversaciones where id = ${conv.id}`;
   return { respuesta, estado: k.estado };
 }
