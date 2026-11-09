@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { verifikActivo } from "@/lib/verifik";
 import { ajustes, expirar, mapVehiculo, negocio, ocupados } from "@/lib/repo";
 
 export const dynamic = "force-dynamic";
@@ -14,5 +15,6 @@ export async function GET() {
     settings: a,
     negocio: negocio(),
     iaDisponible: !!process.env.ANTHROPIC_API_KEY,
+    verifikDisponible: verifikActivo(),
   });
 }

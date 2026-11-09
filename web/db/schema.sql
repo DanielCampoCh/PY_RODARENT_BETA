@@ -121,6 +121,20 @@ create table if not exists whatsapp_procesados (
 );
 create unique index if not exists conversaciones_whatsapp_tel on conversaciones (telefono) where canal = 'whatsapp' and estado <> 'cerrada';
 
+-- Verificación con fuentes oficiales (Verifik): autorización aparte y traza de cada consulta.
+alter table clientes add column if not exists consentimiento_antecedentes timestamptz;
+create table if not exists verificaciones_externas (
+  id bigserial primary key,
+  cliente_id uuid not null references clientes (id) on delete cascade,
+  fuente text not null,
+  resultado text not null check (resultado in ('ok', 'hallazgo', 'no_encontrado', 'error', 'no_aplica')),
+  detalle text not null,
+  referencia text,
+  actor text not null,
+  fecha timestamptz not null default now()
+);
+create index if not exists verificaciones_cliente_idx on verificaciones_externas (cliente_id, fecha desc);
+
 create table if not exists auditoria (
   id bigserial primary key,
   actor text not null,

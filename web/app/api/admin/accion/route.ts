@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db, dias, esCruce, fmtFecha } from "@/lib/db";
 import { actorDe, usuarioActual, type Usuario } from "@/lib/auth";
-import { crearReserva, upsertCliente } from "@/lib/repo";
-import { enviarTexto, ErrorWhatsApp } from "@/lib/whatsapp";
+import { ajustes, crearReserva, requisitosRequeridos, upsertCliente } from "@/lib/repo";
+import { verificarCliente, verifikActivo } from "@/lib/verifik";
+import { enviarTexto, ErrorWhatsApp, probarConexion } from "@/lib/whatsapp";
 
 const ETIQ: Record<string, string> = { pendiente: "Pendiente", aprobada: "Confirmada", en_curso: "En curso", finalizada: "Finalizada", rechazada: "Rechazada", vencida: "Vencida", cancelada: "Cancelada" };
 const VERIF = z.enum(["verificado", "pendiente", "rechazado"]);
-const REQ = ["identidad", "licencia", "edad", "contacto", "deposito"] as const;
+const REQ = ["identidad", "licencia", "edad", "contacto", "deposito", "antecedentes"] as const;
 const id = z.string().uuid();
 const fecha = z.string().datetime({ offset: true });
 
@@ -39,17 +40,19 @@ const Accion = z.discriminatedUnion("tipo", [
   z.object({ tipo: z.literal("leer_conv"), id }),
   z.object({ tipo: z.literal("responder_conv"), id, texto: z.string().trim().min(1).max(2000) }),
   z.object({ tipo: z.literal("leer_notifs") }),
+  z.object({ tipo: z.literal("probar_whatsapp") }),
+  z.object({ tipo: z.literal("verificar_fuentes"), clienteId: id, autorizado: z.boolean().optional().default(false) }),
   z.object({
     tipo: z.literal("ajustes"),
     data: z.object({
       edadMinima: z.number().int().min(18).max(30), licenciaVigente: z.boolean(), categorias: z.array(z.string()).min(1), depositoObligatorio: z.boolean(),
       experienciaActiva: z.boolean(), experienciaMin: z.number().int().min(0).max(15), docAdicional: z.boolean(),
-      prereservaHoras: z.number().int().min(1).max(96), recordatorioHoras: z.number().int().min(1).max(72), retencionDias: z.number().int().min(7).max(365),
+      prereservaHoras: z.number().int().min(1).max(96), recordatorioHoras: z.number().int().min(1).max(72), retencionDias: z.number().int().min(7).max(365), antecedentesActiva: z.boolean().optional(),
     }),
   }),
 ]);
 
-const SOLO_ADMIN = new Set(["aprobar", "verificar", "guardar_vehiculo", "ajustes"]);
+const SOLO_ADMIN = new Set(["aprobar", "verificar", "guardar_vehiculo", "ajustes", "probar_whatsapp", "verificar_fuentes"]);
 
 class Fallo extends Error { constructor(m: string, public status = 400) { super(m); } }
 
@@ -89,7 +92,7 @@ async function ejecutar(a: z.infer<typeof Accion>, u: Usuario): Promise<Record<s
     case "aprobar": {
       const r = await reserva(a.id);
       const [c] = await sql`select nombre, verificacion from clientes where id = ${r.cliente_id}`;
-      const pendientes = REQ.filter((k) => c.verificacion?.[k] !== "verificado");
+      const pendientes = requisitosRequeridos(await ajustes()).filter((k) => c.verificacion?.[k] !== "verificado");
       if (pendientes.length) throw new Fallo(`No se puede aprobar: requisitos sin verificar (${pendientes.join(", ")}).`, 409);
       if (r.expira_en && new Date(r.expira_en) < new Date()) throw new Fallo("La pre-reserva ya venció.", 409);
       await cambiar(a.id, ["pendiente"], "aprobada", "Requisitos verificados");
@@ -136,7 +139,8 @@ async function ejecutar(a: z.infer<typeof Accion>, u: Usuario): Promise<Record<s
         clienteId = c.cliente.id as string;
       }
       const [c] = await sql`select verificacion from clientes where id = ${clienteId}`;
-      const verificado = REQ.every((k) => c?.verificacion?.[k] === "verificado");
+      const req = requisitosRequeridos(await ajustes());
+      const verificado = req.every((k) => c?.verificacion?.[k] === "verificado");
       const r = await crearReserva({ clienteId, vehiculoId: a.vehiculoId, inicio: a.inicio, fin: a.fin, lugar: a.lugar, origen: "manual", estado: verificado ? "aprobada" : "pendiente", notas: a.notas, actor });
       if (!r.ok) throw new Fallo(r.error, 409);
       return { id: r.reserva.id, codigo: r.reserva.codigo };
@@ -185,6 +189,20 @@ async function ejecutar(a: z.infer<typeof Accion>, u: Usuario): Promise<Record<s
       await sql`update conversaciones set historial_api = historial_api || ${sql.json([item])}::jsonb, ultima_actividad = now() where id = ${a.id}`;
       return;
     }
+    case "verificar_fuentes": {
+      if (!verifikActivo()) throw new Fallo("La verificación automática no está configurada (falta VERIFIK_TOKEN).", 409);
+      const [c] = await sql`select nombre, consentimiento_antecedentes from clientes where id = ${a.clienteId}`;
+      if (!c) throw new Fallo("Cliente no encontrado", 404);
+      if (!c.consentimiento_antecedentes) {
+        if (!a.autorizado) throw new Fallo("Primero confirma que el cliente autorizó la consulta de antecedentes y licencia.", 409);
+        await sql`update clientes set consentimiento_antecedentes = now() where id = ${a.clienteId}`;
+        await log(`Registró autorización de consulta de antecedentes de ${c.nombre} (dada al equipo)`);
+      }
+      const [r] = await sql`select fin from reservas where cliente_id = ${a.clienteId} and estado in ('pendiente', 'aprobada') order by inicio limit 1`;
+      const res = await verificarCliente(a.clienteId, actor, r ? new Date(r.fin).toISOString() : undefined);
+      return { verificados: res.verificados, revisar: res.revisar };
+    }
+    case "probar_whatsapp": return { prueba: await probarConexion() };
     case "leer_notifs": await sql`update notificaciones set leida = true where not leida`; return;
     case "ajustes": {
       await sql`update configuracion set valor = valor || ${sql.json(a.data)}::jsonb where clave = 'ajustes'`;

@@ -129,6 +129,8 @@
     { key: "contacto", label: "Contacto verificable" },
     { key: "deposito", label: "Depósito / garantía" },
   ];
+  // El requisito de antecedentes solo cuenta si está activado en Ajustes.
+  RR.reqItems = () => [...RR.REQ_ITEMS, ...(RR.store.state?.settings?.antecedentesActiva ? [{ key: "antecedentes", label: "Antecedentes (Policía y Procuraduría)" }] : [])];
 
   /* ---------- Estado y API ---------- */
   // El estado viene del servidor (base de datos). Aquí solo se guarda en memoria para pintar la interfaz.
@@ -174,7 +176,7 @@
   };
 
   RR.verifOverall = function (c) {
-    const vals = Object.values(c.verif || {});
+    const vals = RR.reqItems().map((it) => (c.verif || {})[it.key] || "pendiente");
     if (vals.includes("rechazado")) return "rechazado";
     if (vals.length && vals.every((v) => v === "verificado")) return "verificado";
     return "pendiente";

@@ -78,6 +78,9 @@
   const pendingCount = () => S.reservations.filter((r) => r.estado === "pendiente").length;
   const unattended = () => S.conversations.filter((c) => c.estado === "pendiente").length;
   const verifBadge = (c) => RR.badge(RR.VERIF, RR.verifOverall(c));
+  // Habitual = tiene al menos un alquiler en curso o terminado.
+  const alquileres = (c) => S.reservations.filter((r) => r.cliente === c.id && ["en_curso", "finalizada"].includes(r.estado)).length;
+  const tipoBadge = (c) => { const n = alquileres(c); return n ? `<span class="badge b-brand" title="${n} alquiler(es)">Habitual · ${n}</span>` : `<span class="badge b-neutral">Nuevo</span>`; };
   const avatar = (name, style = "") => `<span class="avatar" style="${style}">${RR.initials(name)}</span>`;
   const today = () => RR.startOfDay(new Date());
   function refresh() { renderSide(); render(); }
@@ -279,7 +282,7 @@
 
   /* ---------- Componente: checklist de verificación ---------- */
   function verifChecklist(c, editable) {
-    return `<div>${RR.REQ_ITEMS.map((it) => { const val = (c.verif || {})[it.key] || "pendiente"; return `<div class="verif-row"><span>${it.label}${it.key === "edad" && c.edad ? ` <span class="subtle small">(${c.edad} años, declarado)</span>` : ""}${it.key === "licencia" && c.licencia ? ` <span class="subtle small">(${c.licencia}${c.licVence ? ", vence " + RR.fmtDate(c.licVence, { month: "short", year: "numeric" }) : ""})</span>` : ""}</span>
+    return `<div>${RR.reqItems().map((it) => { const val = (c.verif || {})[it.key] || "pendiente"; return `<div class="verif-row"><span>${it.label}${it.key === "edad" && c.edad ? ` <span class="subtle small">(${c.edad} años, declarado)</span>` : ""}${it.key === "licencia" && c.licencia ? ` <span class="subtle small">(${c.licencia}${c.licVence ? ", vence " + RR.fmtDate(c.licVence, { month: "short", year: "numeric" }) : ""})</span>` : ""}</span>
       <span class="tri" data-verif="${it.key}">${["verificado", "pendiente", "rechazado"].map((s) => `<button class="${s} ${val === s ? "on" : ""}" data-v="${s}" ${editable ? "" : "disabled"}>${RR.VERIF[s].label}</button>`).join("")}</span></div>`; }).join("")}</div>`;
   }
   function bindVerif(root, c, onChange) {
@@ -311,7 +314,7 @@
             <dl class="kv"><dt>Recogida</dt><dd>${RR.fmtDT(r.inicio)}</dd><dt>Devolución</dt><dd>${RR.fmtDT(r.fin)}</dd><dt>Lugar</dt><dd>${esc(r.lugar)}</dd><dt>Total</dt><dd>${RR.money(r.total)} <span class="subtle small">(${r.dias} d × ${RR.money(r.precioDia)})</span></dd><dt>Depósito</dt><dd>${RR.money(r.deposito)}</dd>${r.notas ? `<dt>Notas</dt><dd>${esc(r.notas)}</dd>` : ""}</dl>
           </div>
           <div class="dsec"><h4>Cliente</h4>
-            <div class="row" style="gap:12px">${avatar(c.nombre)}<div class="grow"><b>${esc(c.nombre)}</b><div class="small muted">${esc(maskDoc(c.doc) || "Sin documento")} · ${esc(c.tel || "")}</div></div><button class="btn btn-sm" data-cli="${c.id}">Ver ficha</button></div>
+            <div class="row" style="gap:12px">${avatar(c.nombre)}<div class="grow"><div class="row" style="gap:8px"><b>${esc(c.nombre)}</b>${tipoBadge(c)}</div><div class="small muted">${esc(maskDoc(c.doc) || "Sin documento")} · ${esc(c.tel || "")}</div></div><button class="btn btn-sm" data-cli="${c.id}">Ver ficha</button></div>
             ${conv ? `<button class="btn btn-sm btn-ghost" style="margin-top:8px" data-conv="${conv.id}">${I.chat}Ver conversación de WhatsApp</button>` : ""}
           </div>
           <div class="dsec"><div class="row between" style="margin-bottom:10px"><h4 style="margin:0">Validación de requisitos</h4>${verifBadge(c)}</div>
@@ -593,9 +596,10 @@
     v.innerHTML = `<div class="card">
       <div class="toolbar"><div class="search-in">${I.search}<input class="input" id="cliQ" placeholder="Buscar por nombre, documento o teléfono" value="${esc(state.cliQ)}"></div><span class="grow"></span>
         ${["verificado", "pendiente", "rechazado"].map((s) => `<span class="badge ${RR.VERIF[s].cls}">${S.customers.filter((c) => RR.verifOverall(c) === s).length} ${RR.VERIF[s].label.toLowerCase()}s</span>`).join("")}</div>
-      <div class="table-wrap"><table class="table"><thead><tr><th>Cliente</th><th>Documento</th><th>Teléfono</th><th>Origen</th><th>Reservas</th><th>Verificación</th><th>Registro</th></tr></thead>
+      <div class="table-wrap"><table class="table"><thead><tr><th>Cliente</th><th>Tipo</th><th>Documento</th><th>Teléfono</th><th>Origen</th><th>Reservas</th><th>Verificación</th><th>Registro</th></tr></thead>
       <tbody>${list.map((c) => { const n = S.reservations.filter((r) => r.cliente === c.id).length; return `<tr class="clickable" data-cli="${c.id}">
         <td><div class="row" style="gap:10px">${avatar(c.nombre)}<div><div class="cell-main">${esc(c.nombre)}</div><div class="cell-sub">${esc(c.email || "—")}</div></div></div></td>
+        <td>${tipoBadge(c)}</td>
         <td class="mono small">${esc(maskDoc(c.doc) || "—")}</td><td class="small">${esc(c.tel || "—")}</td>
         <td><span class="badge plain b-neutral">${RR.ORIGIN[c.origen] || "—"}</span></td><td class="mono">${n}</td><td>${verifBadge(c)}</td><td class="small muted">${RR.relTime(c.creado)}</td></tr>`; }).join("")}</tbody></table>
       ${list.length ? "" : '<div class="empty">Sin resultados.</div>'}</div></div>`;
@@ -605,13 +609,14 @@
   }
 
   function openCustomer(id) {
-    const c = RR.get.customer(id); if (!c) return;
+    let c = RR.get.customer(id); if (!c) return;
     const d = RR.openModal(`<div id="dc"></div>`, { drawer: true, onClose: refresh });
     const root = $("#dc", d.el);
     function draw() {
+      c = RR.get.customer(id) || c; // los datos se recargan del servidor después de cada acción
       const rs = S.reservations.filter((r) => r.cliente === c.id).sort((a, b) => new Date(b.inicio) - new Date(a.inicio));
       const alq = rs.filter((r) => ["en_curso", "finalizada"].includes(r.estado));
-      root.innerHTML = `<div class="drawer-head"><div class="row" style="gap:12px">${avatar(c.nombre, "width:44px;height:44px;font-size:15px")}<div><h2 style="font-size:18px">${esc(c.nombre)}</h2><div class="row" style="margin-top:4px">${verifBadge(c)}<span class="badge plain b-neutral">${RR.ORIGIN[c.origen] || ""}</span></div></div></div><button class="btn btn-ghost btn-icon" data-close>${I.x}</button></div>
+      root.innerHTML = `<div class="drawer-head"><div class="row" style="gap:12px">${avatar(c.nombre, "width:44px;height:44px;font-size:15px")}<div><h2 style="font-size:18px">${esc(c.nombre)}</h2><div class="row" style="margin-top:4px">${tipoBadge(c)}${verifBadge(c)}<span class="badge plain b-neutral">${RR.ORIGIN[c.origen] || ""}</span></div></div></div><button class="btn btn-ghost btn-icon" data-close>${I.x}</button></div>
         <div class="drawer-body">
           <div class="dsec"><h4>Datos personales</h4><dl class="kv">
             <dt>Documento</dt><dd class="mono">${esc(maskDoc(c.doc) || "—")}</dd><dt>Teléfono</dt><dd>${esc(c.tel || "—")}</dd><dt>Correo</dt><dd>${esc(c.email || "—")}</dd>
@@ -622,12 +627,34 @@
           <div class="dsec"><h4>Consentimientos</h4>
             <div class="verif-row"><span>Tratamiento de datos personales</span>${c.consent?.datos || c.origen !== "manual" ? `<span class="badge b-ok">Otorgado</span>` : `<span class="badge b-warn">Pendiente</span>`}</div>
             <div class="verif-row"><span>Seguimiento comercial</span>${c.consent?.marketing ? `<span class="badge b-ok">Otorgado</span>` : `<span class="badge b-neutral">No otorgado</span>`}</div>
-            <div class="verif-row"><span>Consulta de antecedentes</span><span class="badge b-neutral">No solicitada</span></div></div>
+            <div class="verif-row"><span>Consulta de antecedentes y licencia</span>${c.consent?.antecedentes ? `<span class="badge b-ok">Otorgado</span>` : `<span class="badge b-neutral">No otorgado</span>`}</div></div>
+          ${isAdmin() ? `<div class="dsec"><h4>Verificación con fuentes oficiales</h4>
+            ${S.verifikActivo ? `<button class="btn btn-sm" id="dcVerif">${I.shield}Verificar licencia y antecedentes</button><p class="xs subtle" style="margin-top:6px">Consulta RUNT, Policía y Procuraduría vía Verifik. Solo marca como verificado lo que la fuente confirma; lo demás queda para tu revisión.</p>` : `<p class="xs subtle">No configurada: falta VERIFIK_TOKEN en el servidor.</p>`}
+            ${(() => { const vs = (S.verificaciones || []).filter((x) => x.cliente === c.id); const col = { ok: "b-ok", hallazgo: "b-danger", no_encontrado: "b-warn", error: "b-warn", no_aplica: "b-neutral" }; const lab = { ok: "Sin novedad", hallazgo: "Revisar", no_encontrado: "Sin datos", error: "Falló", no_aplica: "No aplica" };
+              return vs.length ? `<div style="margin-top:10px">${vs.slice(0, 8).map((x) => `<div class="verif-row" style="align-items:flex-start"><div><b class="small">${esc(x.fuente)}</b><div class="xs muted">${esc(x.detalle)}</div><div class="xs subtle">${esc(x.actor)} · ${RR.relTime(x.fecha)}</div></div><span class="badge ${col[x.resultado]}">${lab[x.resultado]}</span></div>`).join("")}</div>` : ""; })()}
+          </div>` : ""}
           <div class="dsec"><h4>Historial · ${rs.length} solicitudes · ${alq.length} alquileres</h4>
             ${rs.length ? rs.map((r) => `<div class="list-item" style="padding:10px 0" data-res="${r.id}"><div class="mini-car" style="width:52px">${RR.carSVG(veh(r.vehiculo).tipo, veh(r.vehiculo).color)}</div><div class="grow"><div class="small bold">${r.codigo} · ${vname(veh(r.vehiculo))}</div><div class="xs subtle">${RR.fmtDate(r.inicio)} → ${RR.fmtDate(r.fin)} · ${RR.money(r.total)}</div></div>${RR.badge(RR.RES_STATUS, r.estado)}</div>`).join("") : '<div class="empty">Sin solicitudes</div>'}</div>
         </div>
         <div class="drawer-foot"><button class="btn btn-primary" id="dcNew">${I.plus}Nueva reserva para este cliente</button></div>`;
       bindVerif(root, c, draw);
+      const bv = $("#dcVerif", root);
+      if (bv) bv.addEventListener("click", () => {
+        const correr = async (autorizado) => {
+          bv.disabled = true; bv.textContent = "Consultando fuentes… (puede tardar unos segundos)";
+          const r = await act("verificar_fuentes", { clienteId: c.id, autorizado });
+          if (r) RR.toast(r.revisar.length ? `Verificado: ${r.verificados.join(", ") || "nada"} · ${r.revisar.length} punto(s) para revisar` : "Licencia, identidad y antecedentes verificados");
+          draw();
+        };
+        if (c.consent?.antecedentes) return correr(false);
+        const m = RR.openModal(`<div class="modal-head"><h2>Autorización del cliente</h2></div>
+          <div class="modal-body stack"><p class="muted">Para consultar la licencia y los antecedentes de <b>${esc(c.nombre)}</b> necesitas su autorización expresa (Ley 1581 de 2012).</p>
+          <label class="check"><input type="checkbox" id="vAut"><span>Confirmo que el cliente autorizó esta consulta. Quedará registrado a mi nombre.</span></label></div>
+          <div class="modal-foot"><button class="btn" data-close>Cancelar</button><button class="btn btn-primary" id="vOk" disabled>Consultar</button></div>`);
+        m.el.querySelector(".modal").style.maxWidth = "460px";
+        $("#vAut", m.el).addEventListener("change", (e) => ($("#vOk", m.el).disabled = !e.target.checked));
+        $("#vOk", m.el).addEventListener("click", () => { m.close(); correr(true); });
+      });
       $$("[data-res]", root).forEach((el) => el.addEventListener("click", () => { d.close(); openReservation(el.dataset.res); }));
       $("#dcNew", root).addEventListener("click", () => { d.close(); newReservation({ cliente: c.id }); });
       $$("[data-close]", root).forEach((b) => b.addEventListener("click", d.close));
@@ -688,6 +715,9 @@
         ? ["Asistente de IA (chat web)", "Conectado", "b-ok", "Responde en el sitio web con datos reales de flota y reservas"]
         : ["Asistente de IA (chat web)", "Sin configurar", "b-warn", "Falta la variable ANTHROPIC_API_KEY en el servidor; mientras tanto los chats pasan a un asesor"],
       ["Base de datos y acceso al panel", "Conectado", "b-ok", "PostgreSQL con bloqueo de reservas duplicadas · sesión segura por usuario"],
+      S.verifikActivo
+        ? ["Verificación con fuentes oficiales (Verifik)", "Conectado", "b-ok", "Licencia en el RUNT, antecedentes en Policía y Procuraduría, con autorización del cliente"]
+        : ["Verificación con fuentes oficiales (Verifik)", "Sin configurar", "b-neutral", "Falta la variable VERIFIK_TOKEN en el servidor"],
       ["Carga de documentos", "Pendiente", "b-neutral", "Hoy se verifican a mano por WhatsApp; siguiente etapa: almacenamiento privado"],
       ["Google Calendar", "No conectado", "b-neutral", "Requiere OAuth de Google Cloud · Etapa 6"],
       ["Correo transaccional", "No conectado", "b-neutral", "Confirmaciones y recordatorios por correo · Etapa 6"],
@@ -702,7 +732,7 @@
           <div class="set-row"><div><b>Depósito o garantía</b><div class="xs subtle">Monto definido por vehículo</div></div>${sw("sDep", st.depositoObligatorio)}</div>
           <div class="set-row"><div><b>Experiencia mínima</b><div class="xs subtle">Años con licencia (si aplica)</div></div><div class="row">${sw("sExpOn", st.experienciaActiva)}<input class="input" type="number" id="sExp" value="${st.experienciaMin}" min="0" max="10" style="width:70px" ${dis}></div></div>
           <div class="set-row"><div><b>Documentación adicional</b><div class="xs subtle">Ej.: recibo de servicio público</div></div>${sw("sDoc", st.docAdicional)}</div>
-          <div class="set-row"><div><b>Consulta de antecedentes</b><div class="xs subtle">Desactivada. Solo con autorización expresa, finalidad legítima y fuente legal; siempre con revisión humana.</div></div><span class="badge b-neutral">No habilitada</span></div>
+          <div class="set-row"><div><b>Exigir antecedentes verificados</b><div class="xs subtle">${S.verifikActivo ? "Para aprobar, el cliente debe tener antecedentes verificados (consulta automática con su autorización, o revisión manual)." : "Requiere configurar Verifik (VERIFIK_TOKEN)."}</div></div>${S.verifikActivo ? sw("sAnt", st.antecedentesActiva) : '<span class="badge b-neutral">No disponible</span>'}</div>
         </div>
         <div class="card"><div class="card-head"><h3>Pre-reservas y recordatorios</h3></div>
           <div class="set-row"><div><b>Vencimiento de pre-reserva</b><div class="xs subtle">Tiempo que una solicitud bloquea el vehículo</div></div><select class="select" id="sPre" ${dis}>${[6, 12, 24, 48].map((h) => `<option value="${h}" ${st.prereservaHoras === h ? "selected" : ""}>${h} horas</option>`).join("")}</select></div>
@@ -712,8 +742,9 @@
         ${ro ? "" : `<div class="row" style="justify-content:flex-end"><button class="btn btn-primary" id="sSave">Guardar configuración</button></div>`}
       </div>
       <div class="stack">
-        <div class="card"><div class="card-head"><h3>Integraciones</h3><span class="xs subtle">Estado real del prototipo</span></div>
-          ${INTEG.map(([n, s, cls, d]) => `<div class="set-row"><div><b>${n}</b><div class="xs subtle">${d}</div></div><span class="badge ${cls}">${s}</span></div>`).join("")}</div>
+        <div class="card"><div class="card-head"><h3>Integraciones</h3><span class="xs subtle">Estado actual del servidor</span></div>
+          ${INTEG.map(([n, s, cls, d]) => `<div class="set-row"><div><b>${n}</b><div class="xs subtle">${d}</div></div><span class="badge ${cls}">${s}</span></div>`).join("")}
+          ${ro ? "" : `<div class="set-row" style="flex-direction:column;align-items:stretch"><button class="btn btn-sm" id="waTest">Probar conexión con WhatsApp</button><div id="waTestOut"></div></div>`}</div>
         <div class="card"><div class="card-head"><h3>Usuarios y roles</h3></div>
           <div class="set-row"><div class="row" style="gap:10px">${avatar(me.nombre)}<div><b>${esc(me.nombre)}</b><div class="xs subtle">Sesión actual</div></div></div><span class="badge ${isAdmin() ? "b-brand" : "b-ok"}">${me.rol}</span></div>
           <div class="set-row"><div class="small muted"><b>Administrador:</b> aprueba, verifica requisitos, edita flota y ajustes.<br><b>Operador:</b> gestiona reservas y conversaciones; ve documentos enmascarados.</div></div>
@@ -724,11 +755,23 @@
       </div>
     </div>`;
     if (ro) return;
+    $("#waTest", v).addEventListener("click", async () => {
+      const btn = $("#waTest", v), out = $("#waTestOut", v);
+      btn.disabled = true; btn.textContent = "Probando…";
+      try {
+        const { prueba: p } = await RR.api("/api/admin/accion", { tipo: "probar_whatsapp" });
+        const tok = p.tokenInfo ? `Token en el servidor: termina en <b>${esc(p.tokenInfo.fin)}</b> (${p.tokenInfo.largo} caracteres). Phone Number ID: ${esc(p.phoneId || "—")}.` : "";
+        out.innerHTML = p.ok
+          ? `<div class="callout ok" style="margin-top:10px">${I.check}<span>Conexión correcta con el número <b>${esc(p.numero || "")}</b>${p.nombre ? ` (${esc(p.nombre)})` : ""}. ${tok}</span></div>`
+          : `<div class="callout err" style="margin-top:10px">${I.alert}<span>${esc(p.error)}<br>${tok}</span></div>`;
+      } catch (e) { out.innerHTML = `<div class="callout err" style="margin-top:10px">${I.alert}<span>${esc(e.message)}</span></div>`; }
+      btn.disabled = false; btn.textContent = "Probar conexión con WhatsApp";
+    });
     $("#sSave", v).addEventListener("click", () => {
       const cats = $$("[data-cat]", v).filter((c) => c.checked).map((c) => c.dataset.cat);
       if (!cats.length) return RR.toast("Selecciona al menos una categoría de licencia", true);
-      Object.assign(st, { edadMinima: +$("#sEdad", v).value, licenciaVigente: $("#sLic", v).checked, categorias: cats, depositoObligatorio: $("#sDep", v).checked, experienciaActiva: $("#sExpOn", v).checked, experienciaMin: +$("#sExp", v).value, docAdicional: $("#sDoc", v).checked, prereservaHoras: +$("#sPre", v).value, recordatorioHoras: +$("#sRec", v).value, retencionDias: +$("#sRet", v).value });
-      act("ajustes", { data: { edadMinima: st.edadMinima, licenciaVigente: st.licenciaVigente, categorias: st.categorias, depositoObligatorio: st.depositoObligatorio, experienciaActiva: st.experienciaActiva, experienciaMin: st.experienciaMin, docAdicional: st.docAdicional, prereservaHoras: st.prereservaHoras, recordatorioHoras: st.recordatorioHoras, retencionDias: st.retencionDias } }, "Configuración guardada").then(() => viewAjustes(v));
+      Object.assign(st, { edadMinima: +$("#sEdad", v).value, licenciaVigente: $("#sLic", v).checked, categorias: cats, depositoObligatorio: $("#sDep", v).checked, experienciaActiva: $("#sExpOn", v).checked, experienciaMin: +$("#sExp", v).value, docAdicional: $("#sDoc", v).checked, prereservaHoras: +$("#sPre", v).value, recordatorioHoras: +$("#sRec", v).value, retencionDias: +$("#sRet", v).value, antecedentesActiva: $("#sAnt", v) ? $("#sAnt", v).checked : !!st.antecedentesActiva });
+      act("ajustes", { data: { edadMinima: st.edadMinima, licenciaVigente: st.licenciaVigente, categorias: st.categorias, depositoObligatorio: st.depositoObligatorio, experienciaActiva: st.experienciaActiva, experienciaMin: st.experienciaMin, docAdicional: st.docAdicional, prereservaHoras: st.prereservaHoras, recordatorioHoras: st.recordatorioHoras, retencionDias: st.retencionDias, antecedentesActiva: !!st.antecedentesActiva } }, "Configuración guardada").then(() => viewAjustes(v));
     });
   }
 

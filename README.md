@@ -100,3 +100,21 @@ El mismo asistente responde por WhatsApp. Webhook: `https://TU-SERVICIO.onrender
 Variables: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` (opcional `WHATSAPP_API_VERSION`, por defecto `v27.0`).
 
 Con el **número de prueba** de Meta (gratis) solo se puede chatear con hasta 5 números que registres en la app de Meta. Para atender a cualquier cliente se necesita un número propio y la verificación del negocio en Meta.
+
+## Verificación automática (Verifik)
+
+Con la autorización expresa del cliente (aparte de la de datos personales), la app consulta con su cédula:
+
+| Fuente | Qué marca como *verificado* |
+|---|---|
+| RUNT | **Licencia**: activa, categoría permitida y vigente hasta el fin del alquiler |
+| Policía, RUNT y Procuraduría | **Identidad**: el nombre oficial coincide con el que dio el cliente |
+| Policía + Procuraduría | **Antecedentes**: "no tiene asuntos pendientes" y sin registros disciplinarios |
+
+- Solo **sube** requisitos a *verificado*. Cualquier hallazgo, homónimo, licencia vencida o falla de la fuente queda **pendiente** para revisión humana; nunca rechaza solo ni pisa un *rechazado* puesto por una persona.
+- Al cliente nunca se le cuentan los hallazgos; solo que un asesor revisará.
+- Se puede lanzar desde el chat/WhatsApp (el agente pide la autorización), desde el formulario web (casilla opcional) o desde la ficha del cliente en el panel (solo administrador). Máximo una consulta automática por cliente cada 24 h desde el agente.
+- Cada consulta queda registrada por fuente (resultado, detalle, quién y cuándo). Solo el administrador ve los detalles.
+- En *Ajustes* se puede **exigir antecedentes verificados** para aprobar reservas.
+
+Variable: `VERIFIK_TOKEN` (cuenta en verifik.co; cada consulta consume créditos del plan).

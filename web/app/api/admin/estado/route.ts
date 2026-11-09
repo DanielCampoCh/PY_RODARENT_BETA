@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { usuarioActual } from "@/lib/auth";
 import { waConfig } from "@/lib/whatsapp";
+import { verifikActivo } from "@/lib/verifik";
 import { ajustes, expirar, mapCliente, mapReserva, mapVehiculo, negocio } from "@/lib/repo";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,7 @@ export async function GET() {
   if (!u) return NextResponse.json({ error: "Sesión no válida" }, { status: 401 });
   await expirar();
   const sql = db();
-  const [veh, cli, res, hist, conv, msgs, aud, notif, a] = await Promise.all([
+  const [veh, cli, res, hist, conv, msgs, aud, notif, a, vext] = await Promise.all([
     sql`select * from vehiculos order by creado_en`,
     sql`select * from clientes order by creado_en desc`,
     sql`select * from reservas order by inicio`,
@@ -22,6 +23,7 @@ export async function GET() {
     sql`select actor, accion, fecha from auditoria order by id desc limit 40`,
     sql`select id, texto, leida, fecha from notificaciones order by id desc limit 20`,
     ajustes(),
+    sql`select cliente_id, fuente, resultado, detalle, actor, fecha from verificaciones_externas order by fecha desc limit 400`,
   ]);
   const histPor = new Map<string, Record<string, unknown>[]>();
   hist.forEach((h) => histPor.set(h.reserva_id, [...(histPor.get(h.reserva_id) ?? []), h]));
@@ -33,6 +35,9 @@ export async function GET() {
     negocio: negocio(),
     iaDisponible: !!process.env.ANTHROPIC_API_KEY,
     whatsappActivo: waConfig().activo,
+    verifikActivo: verifikActivo(),
+    // Los resultados de antecedentes solo los ve el administrador.
+    verificaciones: (u.rol === "admin" ? vext : []).map((x) => ({ cliente: x.cliente_id, fuente: x.fuente, resultado: x.resultado, detalle: x.detalle, actor: x.actor, fecha: new Date(x.fecha).toISOString() })),
     vehicles: veh.map(mapVehiculo),
     customers: cli.map((c) => mapCliente(c, u.rol !== "admin")),
     reservations: res.map((r) => mapReserva(r, histPor.get(r.id))),

@@ -6,6 +6,7 @@
   let S = null; // { vehicles, reservations (solo periodos ocupados), settings }
   let st = null;
   let iaDisponible = false;
+  let verifikDisponible = false;
 
   /* ---------- Iconos estáticos ---------- */
   $("#logoMark").innerHTML = I.car;
@@ -22,6 +23,7 @@
     RR.store.state = S;
     st = d.settings;
     iaDisponible = d.iaDisponible;
+    verifikDisponible = !!d.verifikDisponible;
     RR.setBusiness(d.negocio, d.settings);
     document.querySelectorAll("[data-negocio]").forEach((el) => (el.textContent = d.negocio.nombre));
   }
@@ -167,49 +169,80 @@
         $("#bNext", root).addEventListener("click", () => { b.step = 2; render(); });
       } else if (b.step === 2) {
         const d = b.data;
+        b.modo = b.modo || "nuevo";
+        const hab = b.modo === "habitual";
+        // Para habituales solo se piden los datos que falten en su registro.
+        const pedir = (k) => !hab || (b.habitual && b.habitual.faltan.includes(k));
+        const campos = `
+              ${!hab ? `<div class="field full"><label for="fName">Nombre completo</label><input class="input" id="fName" value="${RR.esc(d.nombre || "")}" autocomplete="name" placeholder="Como aparece en tu documento"></div>` : ""}
+              <div class="field"><label for="fDoc">Número de documento</label><input class="input" id="fDoc" value="${RR.esc(d.docNum || "")}" inputmode="numeric" placeholder="Cédula o pasaporte" ${hab && b.habitual ? "disabled" : ""}></div>
+              <div class="field"><label for="fTel">Celular (WhatsApp)</label><input class="input" id="fTel" value="${RR.esc(d.tel || "")}" inputmode="tel" autocomplete="tel" placeholder="300 123 4567" ${hab && b.habitual ? "disabled" : ""}></div>
+              ${hab && !b.habitual ? `<div class="field full"><button type="button" class="btn" id="fBuscar">${I.search}Buscar mis datos</button><span class="help">Usamos documento + celular para proteger tus datos.</span></div>` : ""}
+              ${hab && b.habitual ? `<div class="full callout ok">${I.check}<span>¡Hola de nuevo, <b>${RR.esc(b.habitual.primerNombre)}</b>! Ya tenemos tus datos${b.habitual.faltan.length ? "; solo completa lo que falta." : ". No tienes que escribirlos otra vez."} <a href="#" id="fOtro" style="color:inherit;font-weight:600">Usar otros datos</a></span></div>` : ""}
+              ${(!hab || b.habitual) && pedir("nacimiento") ? `<div class="field"><label for="fBirth">Fecha de nacimiento</label><input class="input" type="date" id="fBirth" value="${d.birth || ""}"></div>` : ""}
+              ${(!hab || b.habitual) && pedir("email") ? `<div class="field"><label for="fEmail">Correo electrónico</label><input class="input" type="email" id="fEmail" value="${RR.esc(d.email || "")}" autocomplete="email" placeholder="tucorreo@ejemplo.com"></div>` : ""}
+              ${(!hab || b.habitual) && pedir("licencia") ? `<div class="field"><label for="fLic">Categoría de licencia</label><select class="select" id="fLic">${["B1", "B2", "C1", "A2", "Otra"].map((c) => `<option ${d.lic === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>` : ""}
+              ${(!hab || b.habitual) && pedir("licenciaVence") ? `<div class="field"><label for="fLicV">${hab ? "Nuevo vencimiento de la licencia" : "Vencimiento de la licencia"}</label><input class="input" type="date" id="fLicV" value="${d.licV || ""}">${hab ? '<span class="help">La que tenemos registrada vence antes de tu alquiler.</span>' : ""}</div>` : ""}
+              ${!hab || b.habitual ? `<div class="field full"><label for="fNotes">Comentarios (opcional)</label><textarea class="textarea" id="fNotes" placeholder="Ej.: necesito silla para bebé">${RR.esc(d.notas || "")}</textarea></div>
+              ${hab ? "" : '<p class="help full">Después de enviar, un asesor te pedirá la foto de tu cédula y licencia por un canal seguro.</p>'}
+              <label class="check full"><input type="checkbox" id="fConsent" ${d.consent ? "checked" : ""}><span>Autorizo el tratamiento de mis datos personales para gestionar esta solicitud, según la <a href="/privacidad" target="_blank" style="color:var(--brand);font-weight:600">política de privacidad</a>.</span></label>
+              <label class="check full"><input type="checkbox" id="fMkt" ${d.mkt ? "checked" : ""}><span>Quiero recibir recordatorios y promociones por WhatsApp (opcional).</span></label>
+              ${verifikDisponible ? `<label class="check full"><input type="checkbox" id="fVerif" ${d.verif ? "checked" : ""}><span><b>Agilizar mi reserva (opcional):</b> autorizo consultar mi licencia en el RUNT y mis antecedentes en la Policía y la Procuraduría con mi documento. Si no lo autorizas, un asesor revisa tus documentos.</span></label>` : ""}` : ""}`;
         root.innerHTML = head("Tus datos", "Paso 2 de 3 · Información del conductor principal") + `
           <form class="modal-body stack" id="bForm" novalidate>
-            <div class="form-grid">
-              <div class="field full"><label for="fName">Nombre completo</label><input class="input" id="fName" value="${RR.esc(d.nombre || "")}" autocomplete="name" placeholder="Como aparece en tu documento"></div>
-              <div class="field"><label for="fDoc">Número de documento</label><input class="input" id="fDoc" value="${RR.esc(d.docNum || "")}" inputmode="numeric" placeholder="Cédula o pasaporte"></div>
-              <div class="field"><label for="fBirth">Fecha de nacimiento</label><input class="input" type="date" id="fBirth" value="${d.birth || ""}"></div>
-              <div class="field"><label for="fTel">Celular (WhatsApp)</label><input class="input" id="fTel" value="${RR.esc(d.tel || "")}" inputmode="tel" autocomplete="tel" placeholder="300 123 4567"></div>
-              <div class="field"><label for="fEmail">Correo electrónico</label><input class="input" type="email" id="fEmail" value="${RR.esc(d.email || "")}" autocomplete="email" placeholder="tucorreo@ejemplo.com"></div>
-              <div class="field"><label for="fLic">Categoría de licencia</label><select class="select" id="fLic">${["B1", "B2", "C1", "A2", "Otra"].map((c) => `<option ${d.lic === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>
-              <div class="field"><label for="fLicV">Vencimiento de la licencia</label><input class="input" type="date" id="fLicV" value="${d.licV || ""}"></div>
-              <div class="field full"><label for="fNotes">Comentarios (opcional)</label><textarea class="textarea" id="fNotes" placeholder="Ej.: necesito silla para bebé">${RR.esc(d.notas || "")}</textarea></div>
-              <p class="help full">Después de enviar, un asesor te pedirá la foto de tu cédula y licencia por un canal seguro.</p>
-              <label class="check full"><input type="checkbox" id="fConsent" ${d.consent ? "checked" : ""}><span>Autorizo el tratamiento de mis datos personales para gestionar esta solicitud, según la <a href="#" id="fPol" style="color:var(--brand);font-weight:600">política de datos</a>.</span></label>
-              <label class="check full"><input type="checkbox" id="fMkt" ${d.mkt ? "checked" : ""}><span>Quiero recibir recordatorios y promociones por WhatsApp (opcional).</span></label>
-            </div>
+            <div class="seg" style="width:100%"><button type="button" style="flex:1" data-modo="nuevo" class="${!hab ? "active" : ""}">Soy cliente nuevo</button><button type="button" style="flex:1" data-modo="habitual" class="${hab ? "active" : ""}">Ya he alquilado antes</button></div>
+            <div class="form-grid">${campos}</div>
             <div id="fErr"></div>
           </form>
-          <div class="modal-foot"><button class="btn" id="bBack">${I.back} Atrás</button><button class="btn btn-primary" id="bSend">Enviar solicitud</button></div>`;
-        $("#fPol", root).addEventListener("click", (e) => { e.preventDefault(); showPrivacy(); });
-        const collect = () => Object.assign(b.data, { nombre: $("#fName", root).value.trim(), docNum: $("#fDoc", root).value.trim(), birth: $("#fBirth", root).value, tel: $("#fTel", root).value.trim(), email: $("#fEmail", root).value.trim(), lic: $("#fLic", root).value, licV: $("#fLicV", root).value, notas: $("#fNotes", root).value.trim(), consent: $("#fConsent", root).checked, mkt: $("#fMkt", root).checked });
+          <div class="modal-foot"><button class="btn" id="bBack">${I.back} Atrás</button><button class="btn btn-primary" id="bSend" ${hab && !b.habitual ? "disabled" : ""}>Enviar solicitud</button></div>`;
+        const val = (id) => { const el = $(id, root); return el ? (el.type === "checkbox" ? el.checked : el.value.trim()) : undefined; };
+        const collect = () => {
+          const m = { nombre: val("#fName"), docNum: val("#fDoc"), birth: val("#fBirth"), tel: val("#fTel"), email: val("#fEmail"), lic: val("#fLic"), licV: val("#fLicV"), notas: val("#fNotes"), consent: val("#fConsent"), mkt: val("#fMkt"), verif: val("#fVerif") };
+          Object.keys(m).forEach((k) => { if (m[k] !== undefined) d[k] = m[k]; });
+        };
+        $$("[data-modo]", root).forEach((btn) => btn.addEventListener("click", () => { collect(); b.modo = btn.dataset.modo; b.habitual = null; render(); }));
+        const otro = $("#fOtro", root); if (otro) otro.addEventListener("click", (e) => { e.preventDefault(); b.habitual = null; render(); });
+        const buscar = $("#fBuscar", root);
+        if (buscar) buscar.addEventListener("click", async () => {
+          collect();
+          if (!/^[0-9A-Za-z.\-]{5,15}$/.test(d.docNum || "") || !/^\+?[0-9 ]{10,15}$/.test(d.tel || "")) { $("#fErr", root).innerHTML = `<div class="callout err">${I.alert}<span>Escribe tu documento y tu celular.</span></div>`; return; }
+          buscar.disabled = true; buscar.textContent = "Buscando…";
+          try {
+            const r = await RR.api("/api/clientes/identificar", { documento: d.docNum, telefono: d.tel, fin: b.end });
+            if (!r.encontrado) { buscar.disabled = false; buscar.innerHTML = `${I.search}Buscar mis datos`; $("#fErr", root).innerHTML = `<div class="callout warn">${I.alert}<span>No encontramos un cliente con ese documento y celular. Revisa los datos o elige <b>Soy cliente nuevo</b>.</span></div>`; return; }
+            b.habitual = r; render();
+          } catch (err) { buscar.disabled = false; buscar.innerHTML = `${I.search}Buscar mis datos`; $("#fErr", root).innerHTML = `<div class="callout err">${I.alert}<span>${RR.esc(err.message)}</span></div>`; }
+        });
         $("#bBack", root).addEventListener("click", () => { collect(); b.step = 1; render(); });
         $("#bSend", root).addEventListener("click", async () => {
           collect();
           const d2 = b.data, errs = [];
           $$(".input", root).forEach((i) => i.classList.remove("invalid"));
-          const bad = (id, msg) => { $(id, root).classList.add("invalid"); errs.push(msg); };
-          if (d2.nombre.split(" ").filter(Boolean).length < 2) bad("#fName", "Escribe tu nombre y apellido.");
-          if (!/^[0-9A-Za-z.\-]{5,15}$/.test(d2.docNum)) bad("#fDoc", "Documento inválido.");
-          if (!/^\+?[0-9 ]{10,15}$/.test(d2.tel)) bad("#fTel", "Celular inválido (10 dígitos).");
-          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d2.email)) bad("#fEmail", "Correo inválido.");
-          if (!d2.birth) bad("#fBirth", "Indica tu fecha de nacimiento.");
-          else if (Math.floor((Date.now() - new Date(d2.birth)) / (365.25 * 86400000)) < st.edadMinima) bad("#fBirth", `La edad mínima para alquilar es ${st.edadMinima} años.`);
-          if (!d2.licV) bad("#fLicV", "Indica el vencimiento de tu licencia.");
-          else if (new Date(d2.licV) < new Date(b.end)) bad("#fLicV", "Tu licencia debe estar vigente durante todo el alquiler.");
-          if (!st.categorias.includes(d2.lic)) errs.push(`Para este vehículo se requiere licencia ${st.categorias.join(", ")}.`);
+          const bad = (id, msg) => { const el = $(id, root); if (el) el.classList.add("invalid"); errs.push(msg); };
+          const hay = (id) => !!$(id, root);
+          if (hay("#fName") && (d2.nombre || "").split(" ").filter(Boolean).length < 2) bad("#fName", "Escribe tu nombre y apellido.");
+          if (!/^[0-9A-Za-z.\-]{5,15}$/.test(d2.docNum || "")) bad("#fDoc", "Documento inválido.");
+          if (!/^\+?[0-9 ]{10,15}$/.test(d2.tel || "")) bad("#fTel", "Celular inválido (10 dígitos).");
+          if (hay("#fEmail") && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d2.email || "")) bad("#fEmail", "Correo inválido.");
+          if (hay("#fBirth")) {
+            if (!d2.birth) bad("#fBirth", "Indica tu fecha de nacimiento.");
+            else if (Math.floor((Date.now() - new Date(d2.birth)) / (365.25 * 86400000)) < st.edadMinima) bad("#fBirth", `La edad mínima para alquilar es ${st.edadMinima} años.`);
+          }
+          if (hay("#fLicV")) {
+            if (!d2.licV) bad("#fLicV", "Indica el vencimiento de tu licencia.");
+            else if (new Date(d2.licV) < new Date(b.end)) bad("#fLicV", "Tu licencia debe estar vigente durante todo el alquiler.");
+          }
+          if (hay("#fLic") && !st.categorias.includes(d2.lic)) errs.push(`Para este vehículo se requiere licencia ${st.categorias.join(", ")}.`);
           if (!d2.consent) errs.push("Debes autorizar el tratamiento de datos para enviar la solicitud.");
           if (errs.length) { $("#fErr", root).innerHTML = `<div class="callout err">${I.alert}<div>${errs.map(RR.esc).join("<br>")}</div></div>`; return; }
 
           const btn = $("#bSend", root); btn.disabled = true; btn.textContent = "Enviando…";
+          const opt = (id, v) => (hay(id) && v ? v : undefined);
           try {
             const r = await RR.api("/api/reservas", {
-              vehiculo: v.id, inicio: b.start, fin: b.end, lugar: b.loc, nombre: d2.nombre, documento: d2.docNum, telefono: d2.tel, email: d2.email,
-              nacimiento: d2.birth, licencia: d2.lic, licenciaVence: d2.licV, notas: d2.notas, consentimiento: true, marketing: d2.mkt,
+              habitual: hab, vehiculo: v.id, inicio: b.start, fin: b.end, lugar: b.loc, documento: d2.docNum, telefono: d2.tel,
+              nombre: opt("#fName", d2.nombre), email: opt("#fEmail", d2.email), nacimiento: opt("#fBirth", d2.birth), licencia: opt("#fLic", d2.lic), licenciaVence: opt("#fLicV", d2.licV),
+              notas: d2.notas || "", consentimiento: true, marketing: !!d2.mkt, verificar: !!d2.verif,
             });
             b.res = r; b.step = 3; render();
             cargarCatalogo().then(renderGrid).catch(() => {});
@@ -223,7 +256,7 @@
         root.innerHTML = `<div class="modal-head"><span></span><button class="btn btn-ghost btn-icon" data-x>${I.x}</button></div>
           <div class="modal-body" style="text-align:center">
             <div class="success-ic">${I.check}</div>
-            <h2 style="font-size:22px">¡Solicitud enviada!</h2>
+            <h2 style="font-size:22px">¡Solicitud enviada${r.nombre ? ", " + RR.esc(r.nombre) : ""}!</h2>
             <p class="muted" style="margin-top:6px">Tu código es <b style="color:var(--text)">${RR.esc(r.codigo)}</b></p>
             <div class="card card-pad" style="text-align:left;margin-top:20px">
               <div class="row between"><span class="muted small">Vehículo</span><b class="small">${RR.esc(v.marca)} ${RR.esc(v.modelo)}</b></div>
@@ -284,7 +317,7 @@
   }
   function sugerencias() {
     const q = document.createElement("div"); q.className = "quick";
-    [["Quiero cotizar un vehículo", "Quiero cotizar un vehículo"], ["Ver precios", "¿Cuáles son los precios?"], ["Consultar mi reserva", "Quiero consultar mi reserva"], ["Requisitos", "¿Qué requisitos piden?"]]
+    [["Quiero cotizar un vehículo", "Quiero cotizar un vehículo"], ["Ver precios", "¿Cuáles son los precios?"], ["Ya soy cliente", "Ya he alquilado con ustedes antes y quiero reservar de nuevo"], ["Consultar mi reserva", "Quiero consultar mi reserva"], ["Requisitos", "¿Qué requisitos piden?"]]
       .forEach(([l, t]) => { const b = document.createElement("button"); b.type = "button"; b.textContent = l; b.addEventListener("click", () => { q.remove(); enviar(t); }); q.appendChild(b); });
     body().appendChild(q); scroll();
   }

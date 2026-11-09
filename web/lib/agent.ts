@@ -1,7 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { db, dias, fmtFechaHora, soloDigitos, TZ } from "./db";
-import { ajustes, crearReserva, mismoTel, negocio, normalizarDoc, upsertCliente, vehiculosDisponibles, type Ajustes } from "./repo";
+import { verificarCliente, verifikActivo } from "./verifik";
+import { ajustes, clientePorTelefono, crearReserva, mismoTel, negocio, normalizarDoc, perfilCliente, upsertCliente, vehiculosDisponibles, type Ajustes } from "./repo";
 
 type Msg = Anthropic.Beta.BetaMessageParam;
 export type Conv = { id: string; cliente_id: string | null; nombre: string; telefono: string | null; canal?: string; estado: string; historial_api: Msg[] };
@@ -46,22 +47,32 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
   },
   {
     name: "crear_solicitud_reserva",
-    description: "Registra una solicitud de reserva (pre-reserva pendiente de revisión humana). Úsala solo cuando el cliente eligió vehículo y fechas, dio nombre completo, documento y celular, y aceptó explícitamente el tratamiento de sus datos.",
+    description: "Registra una solicitud de reserva (pre-reserva pendiente de revisión humana). Úsala cuando el cliente eligió vehículo, fechas y lugar. Cliente nuevo: requiere nombre completo, documento, celular (en la web) y autorización explícita de datos. Cliente ya registrado (reconocido por WhatsApp o con identificar_cliente): puedes omitir nombre, documento y autorización; se usan los guardados.",
     input_schema: {
       type: "object",
       properties: {
         vehiculo_id: { type: "string", description: "id devuelto por buscar_disponibilidad" },
         inicio: { type: "string", description: "ISO 8601 con -05:00" },
         fin: { type: "string", description: "ISO 8601 con -05:00" },
-        nombre: { type: "string" },
-        documento: { type: "string" },
+        nombre: { type: "string", description: "Omitir si el cliente ya está registrado" },
+        documento: { type: "string", description: "Omitir si el cliente ya está registrado" },
         telefono: { type: "string" },
         email: { type: "string" },
         lugar: { type: "string", description: "Uno de los lugares de recogida permitidos" },
         notas: { type: "string", description: "Propósito del viaje u observaciones" },
         autoriza_datos: { type: "boolean", description: "true solo si el cliente dijo explícitamente que autoriza el tratamiento de sus datos" },
       },
-      required: ["vehiculo_id", "inicio", "fin", "nombre", "documento", "lugar", "autoriza_datos"],
+      required: ["vehiculo_id", "inicio", "fin", "lugar"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "verificar_antecedentes",
+    description: "Verifica automáticamente con fuentes oficiales (licencia en el RUNT, antecedentes en Policía y Procuraduría) al cliente de esta conversación. Úsala solo después de registrar su solicitud o identificarlo, y solo si autorizó expresamente esta consulta. El resultado es un resumen: nunca cuentes al cliente detalles de un hallazgo.",
+    input_schema: {
+      type: "object",
+      properties: { autoriza_consulta: { type: "boolean", description: "true solo si el cliente autorizó expresamente consultar su licencia y antecedentes" } },
+      required: ["autoriza_consulta"],
       additionalProperties: false,
     },
   },
@@ -83,10 +94,11 @@ const In = {
   identificar_cliente: z.object({ documento: z.string().min(4).max(30), telefono: z.string().min(7).max(25).optional() }),
   crear_solicitud_reserva: z.object({
     vehiculo_id: z.string().uuid(), inicio: z.string().datetime({ offset: true }), fin: z.string().datetime({ offset: true }),
-    nombre: z.string().min(3).max(120), documento: z.string().min(5).max(30), telefono: z.string().min(7).max(25).optional(), email: z.string().max(200).optional(),
-    lugar: z.string().max(120), notas: z.string().max(500).optional(), autoriza_datos: z.boolean(),
+    nombre: z.string().min(3).max(120).optional(), documento: z.string().min(5).max(30).optional(), telefono: z.string().min(7).max(25).optional(), email: z.string().max(200).optional(),
+    lugar: z.string().max(120), notas: z.string().max(500).optional(), autoriza_datos: z.boolean().optional(),
   }),
   escalar_a_humano: z.object({ motivo: z.string().min(2).max(300) }),
+  verificar_antecedentes: z.object({ autoriza_consulta: z.boolean() }),
 };
 
 async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a: Ajustes): Promise<{ content: string; is_error?: boolean }> {
@@ -115,7 +127,7 @@ async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a
       const p = In.identificar_cliente.safeParse(input);
       if (!p.success) return err("Datos incompletos.");
       const doc = normalizarDoc(p.data.documento);
-      const [c] = await sql`select id, nombre, telefono, verificacion from clientes where replace(documento, ' ', '') = ${doc.replace(" ", "")}
+      const [c] = await sql`select * from clientes where replace(documento, ' ', '') = ${doc.replace(" ", "")}
         or regexp_replace(documento, '\\D', '', 'g') = ${soloDigitos(p.data.documento)} limit 1`;
       // En WhatsApp el número lo verifica WhatsApp; en la web lo escribe el cliente.
       const tel = esWhatsApp(conv) ? conv.telefono! : p.data.telefono;
@@ -124,9 +136,12 @@ async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a
       const rs = await sql`select r.codigo, r.inicio, r.fin, r.estado, r.total, r.expira_en, v.marca, v.modelo from reservas r join vehiculos v on v.id = r.vehiculo_id
         where r.cliente_id = ${c.id} order by r.inicio desc limit 10`;
       await sql`update conversaciones set cliente_id = ${c.id}, nombre = ${c.nombre}, telefono = coalesce(telefono, ${c.telefono}) where id = ${conv.id}`;
+      conv.cliente_id = c.id;
+      const perfil = await perfilCliente(c);
       const pendientes = Object.entries(c.verificacion ?? {}).filter(([, v]) => v !== "verificado").map(([k]) => k);
       return ok({
-        encontrado: true, nombre: c.nombre, requisitos_pendientes: pendientes,
+        encontrado: true, nombre: c.nombre, cliente_habitual: perfil.habitual, alquileres_anteriores: perfil.alquileres, requisitos_pendientes: pendientes,
+        nota: "Ya está registrado: para una nueva reserva no le pidas otra vez nombre, documento ni autorización de datos.",
         reservas: rs.map((r) => ({ codigo: r.codigo, vehiculo: `${r.marca} ${r.modelo}`, desde: fmtFechaHora(r.inicio), hasta: fmtFechaHora(r.fin), estado: r.estado, total: r.total, vence_prereserva: r.expira_en ? fmtFechaHora(r.expira_en) : null })),
       });
     }
@@ -134,18 +149,45 @@ async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a
       const p = In.crear_solicitud_reserva.safeParse(input);
       if (!p.success) return err("Faltan datos o tienen formato inválido: " + p.error.issues.map((i) => i.path.join(".")).join(", "));
       const d = p.data;
-      if (!d.autoriza_datos) return err("El cliente no ha autorizado el tratamiento de datos. Pídele la autorización explícita antes de registrar.");
       if (!a.lugares.includes(d.lugar)) return err(`Lugar no válido. Opciones: ${a.lugares.join("; ")}`);
-      const tel = esWhatsApp(conv) ? conv.telefono! : d.telefono;
+      // Cliente ya registrado: por su número de WhatsApp o identificado en esta conversación.
+      const base = esWhatsApp(conv) ? await clientePorTelefono(conv.telefono!) : conv.cliente_id ? (await sql`select * from clientes where id = ${conv.cliente_id}`)[0] : null;
+      const mismaPersona = !!base && (!d.documento || soloDigitos(d.documento) === soloDigitos(base.documento ?? ""));
+      const nombre = d.nombre ?? (mismaPersona ? base!.nombre : undefined);
+      const documento = d.documento ?? (mismaPersona ? base!.documento : undefined);
+      if (!nombre || !documento) return err("Pide nombre completo y número de documento del conductor.");
+      if (!d.autoriza_datos && !(mismaPersona && base!.consentimiento_datos)) return err("El cliente no ha autorizado el tratamiento de datos. Pídele la autorización explícita antes de registrar.");
+      const tel = esWhatsApp(conv) ? conv.telefono! : d.telefono ?? (mismaPersona ? base!.telefono : undefined);
       if (!tel) return err("Falta el celular del cliente.");
       const origen = esWhatsApp(conv) ? "whatsapp" : "chat";
-      const c = await upsertCliente({ nombre: d.nombre, documento: d.documento, telefono: tel, email: d.email, origen, consentimiento: true });
+      const c = await upsertCliente({ nombre, documento, telefono: tel, email: d.email, origen, consentimiento: true });
       if (!c.ok) return err(c.error + " Usa escalar_a_humano.");
       const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: d.vehiculo_id, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen, notas: d.notas, actor: "Asistente IA" });
       if (!r.ok) return err(r.error);
       await sql`update conversaciones set cliente_id = ${c.cliente.id}, reserva_id = ${r.reserva.id}, nombre = ${c.cliente.nombre}, telefono = ${c.cliente.telefono} where id = ${conv.id}`;
       await sql`insert into mensajes (conversacion_id, emisor, texto) values (${conv.id}, 'sistema', ${`Solicitud ${r.reserva.codigo} creada · pre-reserva vence ${fmtFechaHora(r.reserva.expira_en)}`})`;
       return ok({ codigo: r.reserva.codigo, estado: "pendiente de revisión", total: r.reserva.total, deposito: r.reserva.deposito, prereserva_vence: fmtFechaHora(r.reserva.expira_en), siguiente_paso: "Un asesor verificará cédula, licencia, edad y depósito antes de confirmar." });
+    }
+    case "verificar_antecedentes": {
+      if (!verifikActivo()) return ok({ disponible: false, nota: "La verificación automática no está activa: dile que un asesor revisará sus documentos." });
+      const p = In.verificar_antecedentes.safeParse(input);
+      const cli = esWhatsApp(conv) ? await clientePorTelefono(conv.telefono!) : conv.cliente_id ? (await sql`select * from clientes where id = ${conv.cliente_id}`)[0] : null;
+      if (!cli) return err("Primero registra la solicitud del cliente (o identifícalo) y luego verifica.");
+      if (!cli.consentimiento_antecedentes) {
+        if (!p.success || !p.data.autoriza_consulta) return err("El cliente no ha autorizado la consulta. Pídele autorización expresa para consultar su licencia (RUNT) y antecedentes (Policía y Procuraduría).");
+        await sql`update clientes set consentimiento_antecedentes = now() where id = ${cli.id}`;
+      }
+      const [reciente] = await sql`select 1 from verificaciones_externas where cliente_id = ${cli.id} and fecha > now() - interval '24 hours' limit 1`;
+      if (reciente) return ok({ ya_verificado_hoy: true, nota: "Ya se verificó en las últimas 24 horas; un asesor tiene el resultado." });
+      const [r] = await sql`select fin from reservas where cliente_id = ${cli.id} and estado in ('pendiente', 'aprobada') order by inicio limit 1`;
+      const res = await verificarCliente(cli.id, "Asistente IA", r ? new Date(r.fin).toISOString() : undefined);
+      return ok({
+        verificados: res.verificados,
+        requiere_revision_humana: res.revisar.length > 0,
+        nota: res.revisar.length
+          ? "Dile solo que parte de la verificación la revisará un asesor y que le escribirán pronto. No menciones fuentes, antecedentes ni hallazgos."
+          : "Dile que su licencia, identidad y antecedentes quedaron verificados y que el depósito y la confirmación final los gestiona un asesor.",
+      });
     }
     case "escalar_a_humano": {
       const p = In.escalar_a_humano.safeParse(input);
@@ -172,11 +214,12 @@ Cómo atender:
 1. Entiende para qué necesita el vehículo, cuántas personas y qué fechas (recogida y devolución con hora) y dónde lo recoge.
 2. Consulta disponibilidad con buscar_disponibilidad. Nunca inventes vehículos, precios ni disponibilidad.
 3. Ofrece 2 o 3 opciones adecuadas con precio por día, total y depósito.
-4. Cuando elija, explica los requisitos y pide nombre completo, número de documento y celular.
-5. Antes de registrar, pide autorización explícita para tratar sus datos personales con el fin de gestionar la reserva (Ley 1581 de 2012). Si no autoriza, no registres y ofrece un asesor.
-6. Registra con crear_solicitud_reserva y entrega el código. Aclara que es una pre-reserva: un asesor revisa los documentos y confirma; tú nunca confirmas ni apruebas reservas.
+4. Cuando elija, explica los requisitos. Si es cliente nuevo, pide nombre completo, número de documento y celular (en WhatsApp no pidas el celular). Si ya está registrado, no le pidas datos que ya tenemos.
+5. Si es cliente nuevo, antes de registrar pide autorización explícita para tratar sus datos personales con el fin de gestionar la reserva (Ley 1581 de 2012). Si no autoriza, no registres y ofrece un asesor.
+6. Registra con crear_solicitud_reserva y entrega el código. Aclara que es una pre-reserva: un asesor revisa los documentos y confirma; tú nunca confirmas ni apruebas reservas.${verifikActivo() ? `
+7. Después de registrar, ofrece agilizar la verificación: con su cédula se consultan su licencia en el RUNT y sus antecedentes en la Policía y la Procuraduría. Pide una autorización expresa y aparte para esa consulta; si acepta, usa verificar_antecedentes. Si no acepta, no pasa nada: un asesor revisará sus documentos. Nunca le cuentes al cliente qué se encontró.` : ""}
 
-Clientes que ya reservaron: para consultar sus reservas pide el documento (y el celular si es el chat web) y usa identificar_cliente. Si no coinciden, no confirmes si la persona existe ni des datos de nadie.
+Clientes nuevos y habituales: en WhatsApp ya sabes si el número está registrado (te lo indica el sistema). En el chat web, cuando vaya a reservar o consultar, pregunta si ya ha alquilado antes; si dice que sí, pide documento y celular y usa identificar_cliente. A un cliente habitual trátalo por su nombre y agradécele que vuelva. Si no coinciden, no confirmes si la persona existe ni des datos de nadie.
 
 Requisitos: edad mínima ${a.edadMinima} años; cédula o pasaporte; licencia ${a.licenciaVigente ? "vigente durante todo el alquiler, " : ""}categoría ${a.categorias.join(", ")}${a.depositoObligatorio ? "; depósito de garantía reembolsable (monto según vehículo)" : ""}${a.experienciaActiva ? `; al menos ${a.experienciaMin} años de experiencia conduciendo` : ""}.
 Condiciones: días de 24 horas; se entrega con tanque lleno y se devuelve igual; kilometraje libre dentro de Antioquia; SOAT y seguro todo riesgo incluidos con deducible; cancelación sin costo hasta 48 horas antes; las pre-reservas se apartan ${a.prereservaHoras} horas.
@@ -228,9 +271,16 @@ export async function atender(conv: Conv, texto: string): Promise<Resultado> {
   const textos: string[] = [];
   // La fecha actual va como mensaje de sistema tras el mensaje del cliente y se guarda en el historial
   // (el historial solo crece; así no se invalida la caché ni el razonamiento previo).
-  const canal = esWhatsApp(conv)
-    ? ` El cliente escribe por WhatsApp desde el número ${conv.telefono} (verificado por WhatsApp): no le pidas el celular. Escribe en texto plano; para resaltar usa *asteriscos simples*.`
-    : " El cliente escribe desde el chat del sitio web.";
+  let canal = " El cliente escribe desde el chat del sitio web.";
+  if (esWhatsApp(conv)) {
+    canal = ` El cliente escribe por WhatsApp desde el número ${conv.telefono} (verificado por WhatsApp): no le pidas el celular. Escribe en texto plano; para resaltar usa *asteriscos simples*.`;
+    const reg = await clientePorTelefono(conv.telefono!);
+    if (reg) {
+      const p = await perfilCliente(reg);
+      canal += ` Este número pertenece a un cliente registrado: ${p.nombre} (${p.habitual ? `cliente habitual, ${p.alquileres} alquiler(es) anterior(es)` : "registrado, sin alquileres terminados aún"}; requisitos ${p.requisitosVerificados ? "ya verificados" : "con verificación pendiente"}; autorización de datos ${p.consentimiento ? "ya otorgada" : "pendiente"}). Salúdalo por su nombre y no le pidas nombre ni documento, salvo que la reserva sea para otra persona.`;
+      if (!conv.cliente_id) await sql`update conversaciones set cliente_id = ${reg.id}, nombre = ${reg.nombre} where id = ${conv.id}`;
+    } else canal += " Este número no está registrado: es un cliente nuevo.";
+  }
   nuevos.push({ role: "system", content: ahora() + canal } as unknown as Msg);
   historial = [...historial, ...nuevos];
 

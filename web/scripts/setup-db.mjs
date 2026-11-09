@@ -37,7 +37,7 @@ async function main() {
 
   await sql`insert into configuracion (clave, valor) values ('ajustes', ${sql.json({
     prereservaHoras: 24, edadMinima: 21, licenciaVigente: true, categorias: ["B1", "B2", "C1"], depositoObligatorio: true,
-    experienciaMin: 2, experienciaActiva: false, docAdicional: false, retencionDias: 90, recordatorioHoras: 24,
+    experienciaMin: 2, experienciaActiva: false, docAdicional: false, retencionDias: 90, recordatorioHoras: 24, antecedentesActiva: false,
     lugares: ["Oficina principal (El Poblado)", "Aeropuerto José María Córdova", "Terminal del Sur", "Domicilio (costo adicional)"],
     horario: "Lun a Sáb · 7:00 a. m. – 7:00 p. m.",
   })}) on conflict (clave) do nothing`;

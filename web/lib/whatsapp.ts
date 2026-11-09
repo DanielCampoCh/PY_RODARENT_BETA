@@ -36,6 +36,17 @@ export class ErrorWhatsApp extends Error {
   constructor(m: string, public codigo?: number) { super(m); }
 }
 
+/** Diagnóstico: comprueba con Meta que el token y el número funcionan (sin enviar mensajes). */
+export async function probarConexion() {
+  const c = waConfig();
+  const tokenInfo = c.token ? { fin: c.token.slice(-4), largo: c.token.length } : null;
+  if (!c.token || !c.phoneId) return { ok: false, error: "Faltan WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID en el servidor.", tokenInfo, phoneId: c.phoneId ?? null };
+  const res = await fetch(`${c.base}/${c.version}/${c.phoneId}?fields=display_phone_number,verified_name`, { headers: { Authorization: `Bearer ${c.token}` } });
+  const j = (await res.json().catch(() => null)) as { display_phone_number?: string; verified_name?: string; error?: { message?: string; code?: number } } | null;
+  if (!res.ok) return { ok: false, error: `Meta rechazó el token${j?.error?.code ? ` (código ${j.error.code})` : ""}: ${j?.error?.message ?? res.statusText}`, tokenInfo, phoneId: c.phoneId };
+  return { ok: true, numero: j?.display_phone_number, nombre: j?.verified_name, tokenInfo, phoneId: c.phoneId };
+}
+
 /** Envía un mensaje de texto. Lanza ErrorWhatsApp si Meta lo rechaza. */
 export async function enviarTexto(para: string, texto: string) {
   const c = waConfig();
@@ -48,7 +59,9 @@ export async function enviarTexto(para: string, texto: string) {
   if (!res.ok) {
     const j = (await res.json().catch(() => null)) as { error?: { message?: string; code?: number } } | null;
     const codigo = j?.error?.code;
-    const msg = codigo === 131047
+    const msg = codigo === 190
+      ? "El token de WhatsApp venció o no es válido (código 190). Genera uno nuevo en Meta y actualiza WHATSAPP_TOKEN en el servidor."
+      : codigo === 131047
       ? "Pasaron más de 24 horas desde el último mensaje del cliente; WhatsApp solo permite escribirle con una plantilla aprobada."
       : codigo === 131030
         ? "Ese número no está en la lista de destinatarios permitidos del número de prueba de Meta."

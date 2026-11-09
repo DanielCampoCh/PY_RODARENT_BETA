@@ -6,7 +6,7 @@ type Row = Record<string, any>;
 export type Ajustes = {
   prereservaHoras: number; edadMinima: number; licenciaVigente: boolean; categorias: string[]; depositoObligatorio: boolean;
   experienciaMin: number; experienciaActiva: boolean; docAdicional: boolean; retencionDias: number; recordatorioHoras: number;
-  lugares: string[]; horario: string;
+  lugares: string[]; horario: string; antecedentesActiva?: boolean;
 };
 
 export const negocio = () => ({
@@ -19,6 +19,10 @@ export async function ajustes(): Promise<Ajustes> {
   const [r] = await db()`select valor from configuracion where clave = 'ajustes'`;
   return r.valor as Ajustes;
 }
+
+/** Requisitos que deben estar verificados para aprobar una reserva. */
+export const REQUISITOS_BASE = ["identidad", "licencia", "edad", "contacto", "deposito"] as const;
+export const requisitosRequeridos = (a: Ajustes): string[] => [...REQUISITOS_BASE, ...(a.antecedentesActiva ? ["antecedentes"] : [])];
 
 export const expirar = () => db()`select expirar_prereservas()`;
 
@@ -40,7 +44,7 @@ export const mapCliente = (c: Row, enmascarar: boolean) => ({
   id: c.id, nombre: c.nombre,
   doc: enmascarar && c.documento ? c.documento.replace(/\d(?=\d{4})/g, "•") : c.documento,
   tel: c.telefono, email: c.email, edad: edad(c.fecha_nacimiento), licencia: c.licencia_categoria, licVence: fechaCorta(c.licencia_vence),
-  origen: c.origen, creado: iso(c.creado_en), verif: c.verificacion, consent: { datos: iso(c.consentimiento_datos), marketing: c.consentimiento_marketing },
+  origen: c.origen, creado: iso(c.creado_en), verif: c.verificacion, consent: { datos: iso(c.consentimiento_datos), marketing: c.consentimiento_marketing, antecedentes: iso(c.consentimiento_antecedentes) },
 });
 
 export const mapReserva = (r: Row, historial: Row[] = []) => ({
@@ -101,7 +105,11 @@ export async function upsertCliente(d: DatosCliente): Promise<{ ok: true; client
     if (existe.telefono && !mismoTel(existe.telefono, telefono)) {
       return { ok: false, error: "Ese documento ya está registrado con otro número de teléfono. Un asesor debe validarlo." };
     }
+    // Si cambian los datos de la licencia, ese requisito debe verificarse de nuevo.
+    const fechaLic = existe.licencia_vence ? new Date(existe.licencia_vence).toISOString().slice(0, 10) : null;
+    const licCambio = (!!d.licenciaVence && d.licenciaVence !== fechaLic) || (!!d.licencia && d.licencia !== existe.licencia_categoria);
     const [c] = await db()`update clientes set
+        verificacion = case when ${licCambio} then jsonb_set(verificacion, '{licencia}', '"pendiente"') else verificacion end,
         email = coalesce(${d.email || null}, email),
         fecha_nacimiento = coalesce(${d.fechaNacimiento || null}::date, fecha_nacimiento),
         licencia_categoria = coalesce(${d.licencia || null}, licencia_categoria),
@@ -117,6 +125,44 @@ export async function upsertCliente(d: DatosCliente): Promise<{ ok: true; client
     values (${d.nombre.trim()}, ${documento}, ${telefono}, ${d.email || null}, ${d.fechaNacimiento || null}, ${d.licencia || null}, ${d.licenciaVence || null}, ${d.origen},
       ${db().json(verif)}, ${d.consentimiento ? new Date() : null}, ${!!d.marketing}) returning *`;
   return { ok: true, cliente: c };
+}
+
+/* ---------- Clientes habituales ---------- */
+/** Cliente cuyo documento Y celular coinciden (para que nadie consulte datos ajenos con solo un documento). */
+export async function clientePorDocYTel(documento: string, telefono: string) {
+  const doc = normalizarDoc(documento);
+  const [c] = await db()`select * from clientes where replace(documento, ' ', '') = ${doc.replace(" ", "")}
+    or regexp_replace(documento, '\\D', '', 'g') = ${soloDigitos(documento)} order by creado_en limit 1`;
+  return c && mismoTel(c.telefono, telefono) ? c : null;
+}
+
+/** Cliente registrado con ese celular (en WhatsApp el número lo verifica WhatsApp). */
+export async function clientePorTelefono(telefono: string) {
+  const ult = soloDigitos(telefono).slice(-10);
+  if (ult.length < 10) return null;
+  const [c] = await db()`select * from clientes where right(regexp_replace(coalesce(telefono, ''), '\\D', '', 'g'), 10) = ${ult} order by creado_en desc limit 1`;
+  return c ?? null;
+}
+
+/** Resumen del cliente: si es habitual y qué datos faltan para reservar sin volver a escribirlos. */
+export async function perfilCliente(c: Row, finReserva?: string) {
+  const [{ n }] = await db()`select count(*)::int as n from reservas where cliente_id = ${c.id} and estado in ('en_curso', 'finalizada')`;
+  const licVencida = !c.licencia_vence || (finReserva ? new Date(c.licencia_vence) < new Date(finReserva) : new Date(c.licencia_vence) < new Date());
+  const faltan: string[] = [];
+  if (!c.email) faltan.push("email");
+  if (!c.fecha_nacimiento) faltan.push("nacimiento");
+  if (!c.licencia_categoria) faltan.push("licencia");
+  if (licVencida) faltan.push("licenciaVence");
+  const verif = (c.verificacion ?? {}) as Record<string, string>;
+  return {
+    nombre: c.nombre as string,
+    primerNombre: String(c.nombre).split(" ")[0],
+    alquileres: n,
+    habitual: n > 0,
+    requisitosVerificados: Object.values(verif).length > 0 && Object.values(verif).every((v) => v === "verificado"),
+    consentimiento: !!c.consentimiento_datos,
+    faltan,
+  };
 }
 
 /* ---------- Reservas ---------- */
