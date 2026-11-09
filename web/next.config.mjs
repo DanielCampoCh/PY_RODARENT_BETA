@@ -5,6 +5,7 @@ const nextConfig = {
     return [
       { source: "/", destination: "/index.html" },
       { source: "/admin", destination: "/admin.html" },
+      { source: "/privacidad", destination: "/privacidad.html" },
     ];
   },
   async headers() {

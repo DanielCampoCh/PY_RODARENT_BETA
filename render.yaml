@@ -32,12 +32,5 @@ services:
         value: Medellín
       - key: NEGOCIO_WHATSAPP
         sync: false
-      # WhatsApp Business (Cloud API de Meta). Si el servicio ya existe, agrégalas en Environment.
-      - key: WHATSAPP_TOKEN
-        sync: false
-      - key: WHATSAPP_PHONE_NUMBER_ID
-        sync: false
-      - key: WHATSAPP_APP_SECRET
-        sync: false
-      - key: WHATSAPP_VERIFY_TOKEN
-        generateValue: true
+      # WhatsApp Business: WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_APP_SECRET y
+      # WHATSAPP_VERIFY_TOKEN se configuran a mano en Render (en el servicio o en un Environment Group).

@@ -2,14 +2,16 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 /** Configuración de WhatsApp Business (Cloud API de Meta). */
 export function waConfig() {
-  const token = process.env.WHATSAPP_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  // trim(): los paneles de hosting a veces guardan espacios o saltos de línea al pegar.
+  const env = (k: string) => process.env[k]?.trim() || undefined;
+  const token = env("WHATSAPP_TOKEN");
+  const phoneId = env("WHATSAPP_PHONE_NUMBER_ID");
+  const appSecret = env("WHATSAPP_APP_SECRET");
+  const verifyToken = env("WHATSAPP_VERIFY_TOKEN");
   return {
-    activo: !!(token && phoneId && process.env.WHATSAPP_APP_SECRET && process.env.WHATSAPP_VERIFY_TOKEN),
-    token, phoneId,
-    appSecret: process.env.WHATSAPP_APP_SECRET,
-    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
-    version: process.env.WHATSAPP_API_VERSION || "v23.0",
+    activo: !!(token && phoneId && appSecret && verifyToken),
+    token, phoneId, appSecret, verifyToken,
+    version: env("WHATSAPP_API_VERSION") || "v27.0",
     base: process.env.WHATSAPP_GRAPH_URL || "https://graph.facebook.com",
   };
 }

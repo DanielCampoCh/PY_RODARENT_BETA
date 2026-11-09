@@ -97,6 +97,6 @@ El mismo asistente responde por WhatsApp. Webhook: `https://TU-SERVICIO.onrender
 - **Asesor:** al *Tomar conversación* la IA se pausa y tus respuestas salen por WhatsApp. Meta solo permite texto libre dentro de las 24 h siguientes al último mensaje del cliente.
 - **Fotos, audios y documentos:** se registran en el panel y se pide escribir en texto (la lectura de documentos queda para otra etapa).
 
-Variables: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` (opcional `WHATSAPP_API_VERSION`, por defecto `v23.0`).
+Variables: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` (opcional `WHATSAPP_API_VERSION`, por defecto `v27.0`).
 
 Con el **número de prueba** de Meta (gratis) solo se puede chatear con hasta 5 números que registres en la app de Meta. Para atender a cualquier cliente se necesita un número propio y la verificación del negocio en Meta.

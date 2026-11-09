@@ -106,7 +106,6 @@
     ];
     $("#faqList").innerHTML = FAQ.map(([q, a], i) => `<details class="faq" ${i === 0 ? "open" : ""}><summary>${q}</summary><p>${a}</p></details>`).join("");
   }
-  $("#privacyLink").addEventListener("click", (e) => { e.preventDefault(); showPrivacy(); });
 
   function showPrivacy() {
     RR.openModal(`<div class="modal-head"><h2>Autorización de tratamiento de datos</h2><button class="btn btn-ghost btn-icon" data-close>${I.x}</button></div>
