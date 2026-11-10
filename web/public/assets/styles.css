@@ -270,3 +270,9 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .ant-result.b-warn { border-left-color: var(--warn); }
 .ant-result.b-danger { border-left-color: var(--danger); }
 .ant-result.b-ok, .ant-result.b-warn, .ant-result.b-danger { color: var(--text); background: var(--surface); }
+.ant-fav-box { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-radius: 10px; background: var(--brand-50); border: 1px dashed var(--brand); }
+.ant-fav { cursor: grab; font-weight: 700; }
+.ant-cola { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px)); z-index: 60; width: min(340px, calc(100vw - 32px)); background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--brand); border-radius: 12px; padding: 12px 14px; box-shadow: var(--shadow-lg, 0 10px 30px rgba(0,0,0,.18)); }
+.ant-fav-box { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-radius: 10px; background: var(--brand-50); border: 1px dashed var(--brand); }
+.ant-fav { cursor: grab; font-weight: 700; }
+.ant-cola { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px)); z-index: 60; width: min(340px, calc(100vw - 32px)); background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--brand); border-radius: 12px; padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.18); }

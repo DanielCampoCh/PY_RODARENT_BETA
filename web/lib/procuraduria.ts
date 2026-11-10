@@ -45,6 +45,24 @@ export function separarNombre(nombre: string) {
   return { ...vacio, primer_nombre: t[0], segundo_nombre: t.slice(1, -2).join(" "), primer_apellido: t[t.length - 2], segundo_apellido: t[t.length - 1] };
 }
 
+/** Separa un nombre sin espacios ("DANIELCAMPOCHAGUENDO") con las palabras del nombre registrado ("Daniel Campo"). */
+export function separarPegado(pegado: string, registrado: string) {
+  const up = sinTildes(pegado.normalize("NFC"));
+  if (up.length !== pegado.normalize("NFC").length) return pegado;
+  const palabras = [...new Set(sinTildes(registrado).split(/\s+/).filter((w) => w.length > 1))].sort((a, b) => b.length - a.length);
+  const out: string[] = [];
+  let pos = 0, suelto = "", usadas = 0;
+  while (pos < up.length) {
+    const w = palabras.find((p) => up.startsWith(p, pos));
+    if (w) {
+      if (suelto) { out.push(suelto); suelto = ""; }
+      out.push(pegado.slice(pos, pos + w.length)); pos += w.length; usadas++;
+    } else { suelto += pegado[pos]; pos++; }
+  }
+  if (suelto) out.push(suelto);
+  return usadas ? out.join(" ") : pegado;
+}
+
 /** ¿El nombre registrado coincide con el del certificado? (primer nombre y al menos un apellido). */
 export function nombreCoincide(registrado: string, certificado: string) {
   const a = sinTildes(registrado).split(/\s+/).filter((x) => x.length > 1);
@@ -67,7 +85,10 @@ function clasificar(t: string): EstadoAntecedentes {
 export function leerCertificado(texto: string, documentoEsperado: string, nombreRegistrado?: string): LecturaCertificado {
   const plano = texto.replace(/ /g, " ").replace(/[ \t]+/g, " ");
   const m = plano.match(/se[ñn]or\s*\(a\)\s+([^:\n]{3,120}?)\s+identificad[oa]\s*(?:\(a\))?\s+con\s+[^\n]{0,60}?n[úu]mero\s*:?\s*([\d.,\s]{4,20}\d)/i);
-  const nombre = m ? m[1].replace(/\s+/g, " ").trim() : "";
+  let nombre = m ? m[1].replace(/\s+/g, " ").trim() : "";
+  // La página oficial pinta cada palabra en una etiqueta aparte y al copiarla salen pegadas
+  // (ANDRESFELIPECAMPO…): se separan usando el nombre registrado como guía.
+  if (nombre && !nombre.includes(" ") && nombre.length >= 8 && nombreRegistrado) nombre = separarPegado(nombre, nombreRegistrado);
   const documento = m ? soloDigitos(m[2]) : "";
   const fecha = plano.match(/fecha\s+de\s+consulta\s*:?\s*([^\n]+?)(?:\s+-\s+hora\s+de\s+consulta\s*:?\s*([\d:]+))?\s*(?:\n|$)/i);
   const t = plano.toLowerCase();

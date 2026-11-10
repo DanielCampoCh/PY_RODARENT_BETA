@@ -658,6 +658,117 @@
     ["clientes", "Clientes", (s) => s.tipo === "cliente"],
   ];
 
+  /* ---------- Puente con la página de la Procuraduría (botón de favoritos) ----------
+     El botón "⭐ RodaRent" se guarda una vez en la barra de favoritos. En la Procuraduría:
+     1.er clic → llena la cédula; la persona responde la pregunta y pulsa Consultar;
+     2.º clic → envía el resultado al panel (que lo guarda y pasa a la siguiente persona).
+     La pregunta de verificación del sitio siempre la responde la persona. */
+  const PROCU_ORIGIN = "https://apps.procuraduria.gov.co";
+  const procu = { actual: null, cola: null };
+  function codigoMarcador() {
+    const js = `(function(){var O=${JSON.stringify(location.origin)},U=${JSON.stringify(URL_PROCU)},op=window.opener;
+function aviso(t,ok){var d=document.getElementById('rrAviso');if(!d){d=document.createElement('div');d.id='rrAviso';d.style.cssText='position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:99999;padding:12px 18px;border-radius:10px;font:600 15px system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.25);max-width:90vw;text-align:center';document.body.appendChild(d);}d.style.background=ok?'#e7f6ec':'#fff4e0';d.style.color=ok?'#11643a':'#7a4a00';d.textContent=t;}
+if(!/procuraduria\\.gov\\.co$/.test(location.hostname)){alert('Usa este botón en la página de antecedentes de la Procuraduría.');return;}
+if(!op||op.closed){alert('Abre la Procuraduría desde el panel de RodaRent (botón Consultar) y usa este botón en esa pestaña.');return;}
+function esp(tipo,cb){var t,h=function(e){if(e.origin===O&&e.data&&e.data.rr===tipo){window.removeEventListener('message',h);clearTimeout(t);cb(e.data);}};t=setTimeout(function(){window.removeEventListener('message',h);aviso('El panel de RodaRent no respondió. ¿Sigue abierto?',false);},8000);window.addEventListener('message',h);}
+var hay=/identificad[oa]/i.test(document.body.innerText)&&!document.getElementById('rrEnviado');
+if(!hay){esp('cedula',function(d){if(!d.cedula){aviso(d.mensaje||'En el panel no hay ninguna consulta abierta.',false);return;}var c=document.getElementById('txtNumID'),s=document.getElementById('ddlTipoID'),r=document.getElementById('txtRespuestaPregunta');if(!c){aviso('No encontré el formulario de consulta.',false);return;}if(s)s.value='1';c.value=d.cedula;aviso('Cédula '+d.cedula+(d.nombre?' · '+d.nombre:'')+' lista. Responde la pregunta y pulsa Consultar.',true);if(r){r.value='';r.focus();r.style.outline='3px solid #2546d8';}});op.postMessage({rr:'pedir'},O);return;}
+document.querySelectorAll('span').forEach(function(s){s.append(' ');});
+var k=document.createElement('i');k.id='rrEnviado';k.hidden=true;document.body.appendChild(k);
+aviso('Enviando a RodaRent…',true);
+esp('respuesta',function(d){aviso(d.mensaje||'Enviado al panel.',!!d.guardado);if(d.siguiente){setTimeout(function(){location.href=U;},1600);}});
+op.postMessage({rr:'resultado',texto:document.body.innerText},O);})()`;
+    return "javascript:" + encodeURIComponent(js.replace(/\n/g, ""));
+  }
+  const marcadorHTML = () => `<a class="btn ant-fav" href="${codigoMarcador()}" draggable="true" title="Arrástrame a la barra de favoritos" data-fav>⭐ RodaRent</a>`;
+  const bindMarcador = (root) => $$("[data-fav]", root).forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); RR.toast("Arrastra este botón a tu barra de favoritos (Ctrl+Shift+B la muestra)"); }));
+  const abrirProcu = () => window.open(URL_PROCU, "rr_procuraduria");
+
+  window.addEventListener("message", async (e) => {
+    if (e.origin !== PROCU_ORIGIN || !e.data || typeof e.data !== "object" || !e.source) return;
+    const responder = (d) => e.source.postMessage(d, e.origin);
+    const a = procu.actual;
+    if (e.data.rr === "pedir") {
+      responder(a ? { rr: "cedula", cedula: a.doc, nombre: a.nombre } : { rr: "cedula", cedula: null, mensaje: "En el panel de RodaRent no hay ninguna consulta abierta. Pulsa «Consultar» junto a una persona." });
+    } else if (e.data.rr === "resultado" && typeof e.data.texto === "string") {
+      if (!a) { responder({ rr: "respuesta", guardado: false, mensaje: "En el panel no hay ninguna consulta abierta." }); return; }
+      try { responder({ rr: "respuesta", ...(await a.recibir(e.data.texto.slice(0, 60000))) }); }
+      catch (err) { responder({ rr: "respuesta", guardado: false, mensaje: err.message || "No se pudo procesar el resultado." }); }
+    }
+  });
+
+  /* ---------- Modo seguido: consultar varias personas una tras otra ---------- */
+  function consultarSeguido(lista) {
+    if (!lista.length) { RR.toast("No hay personas sin consultar"); return; }
+    const sinAut = lista.filter((s) => !s.consent).length;
+    const m = RR.openModal(`<div class="modal-head"><h2>Consultar ${lista.length} persona(s) seguidas</h2><button class="btn btn-ghost btn-icon" data-close aria-label="Cerrar">${I.x}</button></div>
+      <div class="modal-body stack">
+        <p class="muted small">Se abre la Procuraduría en otra pestaña y te quedas allí. Por cada persona:</p>
+        <div class="ant-steps" style="grid-template-columns:1fr">
+          <div><b>1</b><span>Pulsa <b>⭐ RodaRent</b> en tus favoritos: se llena la cédula.</span></div>
+          <div><b>2</b><span>Responde la pregunta y pulsa <b>Consultar</b>.</span></div>
+          <div><b>3</b><span>Pulsa otra vez <b>⭐ RodaRent</b>: el resultado se guarda solo en el panel y la página queda lista para la siguiente persona.</span></div>
+        </div>
+        <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap">${marcadorHTML()}<span class="xs subtle">¿No lo tienes? Arrástralo a la barra de favoritos (Ctrl+Shift+B la muestra).</span></div>
+        ${sinAut ? `<label class="check"><input type="checkbox" id="sqAut"><span>Confirmo que estas ${lista.length} personas autorizaron consultar sus antecedentes (Ley 1581 de 2012). Quedará registrado a mi nombre.</span></label>` : ""}
+      </div>
+      <div class="modal-foot"><button class="btn" data-close>Cancelar</button><button class="btn btn-primary" id="sqGo" ${sinAut ? "disabled" : ""}>${I.link}Empezar y abrir Procuraduría</button></div>`);
+    m.el.querySelector(".modal").style.maxWidth = "540px";
+    bindMarcador(m.el);
+    if (sinAut) $("#sqAut", m.el).addEventListener("change", (e) => ($("#sqGo", m.el).disabled = !e.target.checked));
+    $("#sqGo", m.el).addEventListener("click", () => {
+      m.close();
+      procu.cola = { lista: lista.map((s) => ({ tipo: s.tipo, id: s.id })), i: 0, hechas: 0, ultimo: "" };
+      abrirProcu();
+      siguienteEnCola();
+    });
+  }
+  function siguienteEnCola() {
+    const c = procu.cola; if (!c) return;
+    const item = c.lista[c.i];
+    const s = item && sujetoDe(item.tipo, item.id);
+    if (!s) { finCola(); return null; }
+    procu.actual = {
+      doc: s.doc, nombre: s.nombre,
+      recibir: async (texto) => {
+        const r = await RR.api("/api/admin/accion", { tipo: "leer_antecedentes", sujeto: s.tipo, id: s.id, texto });
+        const l = r.lectura;
+        if (!l.documento) return { guardado: false, mensaje: "No encontré el resultado en esta página. Pulsa Consultar primero y luego ⭐ RodaRent." };
+        if (!l.coincide_documento) return { guardado: false, mensaje: `Este resultado es de la cédula ${l.documento}, pero toca ${s.doc} (${s.nombre}). Pulsa ⭐ RodaRent en el formulario para llenarla.` };
+        const g = await act("guardar_antecedentes", { sujeto: s.tipo, id: s.id, texto, autorizado: true });
+        if (!g) return { guardado: false, mensaje: "No se pudo guardar. Revisa el panel." };
+        c.hechas++; c.i++;
+        const ok = l.estado === "limpio" && l.coincide_nombre !== false;
+        c.ultimo = `${ok ? "✓" : "⚠"} ${s.nombre}: ${ANT[l.estado][0]}${l.coincide_nombre === false ? " · nombre distinto" : ""}`;
+        const sig = siguienteEnCola();
+        if (state.view === "antecedentes") refresh();
+        return { guardado: true, siguiente: sig ? sig.doc : null, mensaje: `${c.ultimo}${ok ? "" : " (quedó para tu revisión)"}. ${sig ? `Siguiente: ${sig.nombre}.` : "¡Listo, era la última!"}` };
+      },
+    };
+    pintarCola();
+    return s;
+  }
+  function finCola() {
+    const c = procu.cola;
+    procu.actual = null; procu.cola = null;
+    $("#rrCola")?.remove();
+    if (c) RR.toast(`Modo seguido terminado: ${c.hechas} consulta(s) guardada(s)`);
+    if (state.view === "antecedentes") refresh();
+  }
+  function pintarCola() {
+    const c = procu.cola; if (!c) return;
+    let box = $("#rrCola");
+    if (!box) { box = document.createElement("div"); box.id = "rrCola"; box.className = "ant-cola"; document.body.appendChild(box); }
+    const a = procu.actual;
+    box.innerHTML = `<div class="row between" style="gap:8px"><b class="small">Consultando seguidas · ${Math.min(c.i + 1, c.lista.length)} de ${c.lista.length}</b><button class="btn btn-ghost btn-sm" id="cqStop">Detener</button></div>
+      ${a ? `<div class="small" style="margin-top:6px">Ahora: <b>${esc(a.nombre)}</b> · <span class="mono">${esc(a.doc)}</span></div>` : ""}
+      ${c.ultimo ? `<div class="xs muted" style="margin-top:4px">${esc(c.ultimo)}</div>` : ""}
+      <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap"><button class="btn btn-sm" id="cqOpen">${I.link}Abrir Procuraduría</button><button class="btn btn-sm" id="cqSkip">Saltar persona</button></div>`;
+    $("#cqStop", box).addEventListener("click", finCola);
+    $("#cqOpen", box).addEventListener("click", abrirProcu);
+    $("#cqSkip", box).addEventListener("click", () => { c.i++; c.ultimo = `Saltada: ${a ? a.nombre : ""}`; siguienteEnCola(); });
+  }
+
   function viewAntecedentes(v) {
     const todos = sujetos();
     const tab = ANT_TABS.find((t) => t[0] === state.antTab) || ANT_TABS[0];
@@ -671,14 +782,19 @@
         <div class="card-head"><h3>Antecedentes en la Procuraduría</h3><span class="badge b-ok">Gratis · página oficial</span></div>
         <div class="stack" style="padding:16px 20px">
           <p class="small muted" style="max-width:75ch">Valida la cédula de clientes y del personal. Una persona del equipo hace la consulta en la página oficial y el panel lee el resultado: separa nombres y apellidos, revisa que la cédula y el nombre coincidan y guarda el soporte con fecha y quién consultó.</p>
+          <div class="ant-fav-box">
+            <div class="grow"><b class="small">Una sola vez: arrastra este botón a tu barra de favoritos</b><div class="xs subtle">Si no ves la barra, presiona Ctrl+Shift+B. Con él no tienes que copiar ni pegar nada.</div></div>
+            ${marcadorHTML()}
+          </div>
           <div class="ant-steps">
-            <div><b>1</b><span>Pulsa <b>Consultar</b>: se copia la cédula y se abre la Procuraduría.</span></div>
-            <div><b>2</b><span>Pega la cédula, responde la pregunta del sitio y pulsa Consultar.</span></div>
-            <div><b>3</b><span>En el resultado presiona <b>Ctrl+A</b> y <b>Ctrl+C</b>, o descarga el certificado PDF.</span></div>
-            <div><b>4</b><span>Pégalo o súbelo en el panel y guarda.</span></div>
+            <div><b>1</b><span>Pulsa <b>Consultar</b> (o <b>Consultar pendientes seguidas</b>): se abre la Procuraduría.</span></div>
+            <div><b>2</b><span>Allí pulsa <b>⭐ RodaRent</b>: se llena la cédula sola.</span></div>
+            <div><b>3</b><span>Responde la pregunta del sitio y pulsa <b>Consultar</b>.</span></div>
+            <div><b>4</b><span>Pulsa otra vez <b>⭐ RodaRent</b>: el resultado llega al panel y se guarda.</span></div>
           </div>
           <div class="row" style="gap:8px;flex-wrap:wrap">
-            <button class="btn btn-primary" id="anAdd">${I.plus}Agregar persona del personal</button>
+            <button class="btn btn-primary" id="anSeg">${I.shield}Consultar pendientes seguidas (${todos.filter((x) => !x.ult).length})</button>
+            <button class="btn" id="anAdd">${I.plus}Agregar persona del personal</button>
             <button class="btn" id="anImp">${I.doc}Importar lista (CSV o Excel)</button>
             <button class="btn" id="anXls">${I.out}Descargar reporte Excel</button>
             <input type="file" id="anImpFile" accept=".csv,.txt,.xlsx,.xls" hidden>
@@ -715,6 +831,8 @@
       if (p && (await pregunta(`¿Quitar a ${p.nombre} del personal?`, "Sus consultas anteriores se conservan en el historial.", "Quitar", true))) { await act("quitar_personal", { id: p.id }, "Persona quitada"); refresh(); }
     }));
     $("#anAdd", v).addEventListener("click", agregarPersonal);
+    $("#anSeg", v).addEventListener("click", () => consultarSeguido(todos.filter((x) => !x.ult)));
+    bindMarcador(v);
     $("#anImp", v).addEventListener("click", () => $("#anImpFile", v).click());
     $("#anImpFile", v).addEventListener("change", (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) importarLista(f); });
     $("#anXls", v).addEventListener("click", () => reporteExcel(rows));
@@ -752,21 +870,38 @@
     const m = RR.openModal(`<div class="modal-head"><div><h2>Antecedentes · ${esc(s.nombre)}</h2><div class="xs subtle" style="margin-top:4px">${esc(s.rol)} · Procuraduría General de la Nación</div></div><button class="btn btn-ghost btn-icon" data-close aria-label="Cerrar">${I.x}</button></div>
       <div class="modal-body stack">
         <div class="ant-box"><div class="ant-n">1</div><div class="grow stack" style="gap:8px">
-          <div>Consulta la cédula <b class="mono" style="font-size:16px">${esc(s.doc)}</b> en la página oficial.</div>
-          <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" id="anOpen">${I.link}Copiar cédula y abrir Procuraduría</button><button class="btn btn-sm" id="anCopy">Copiar cédula</button></div>
-          <div class="xs subtle">Allí elige «Cédula de ciudadanía», pega la cédula, responde la pregunta y pulsa Consultar.</div></div></div>
+          <div>Abre la Procuraduría para la cédula <b class="mono" style="font-size:16px">${esc(s.doc)}</b>.</div>
+          <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" id="anOpen">${I.link}Abrir Procuraduría</button><button class="btn btn-sm" id="anCopy">Copiar cédula</button></div>
+          <div class="xs subtle">Allí pulsa <b>⭐ RodaRent</b> (llena la cédula), responde la pregunta, pulsa Consultar y otra vez <b>⭐ RodaRent</b>: el resultado aparece aquí solo.</div></div></div>
         <div class="ant-box"><div class="ant-n">2</div><div class="grow stack" style="gap:8px">
-          <div>Copia el resultado: en esa página presiona <b>Ctrl+A</b> y <b>Ctrl+C</b> y pégalo aquí. También puedes subir el certificado PDF.</div>
+          <div class="row between" style="gap:8px;flex-wrap:wrap"><span>Resultado <span class="xs subtle">(llega solo con ⭐ RodaRent, o pégalo / sube el PDF)</span></span><button class="btn btn-sm" id="anPaste">Pegar resultado</button></div>
           <textarea class="textarea" id="anTxt" rows="4" placeholder="Pega aquí la página de resultados…"></textarea>
           <label class="ant-drop" id="anDrop"><input type="file" id="anFile" accept="application/pdf,image/png,image/jpeg,image/webp" hidden>${I.doc}<span id="anFileTxt">Arrastra el certificado PDF o una captura, o haz clic para elegirlo</span></label></div></div>
         <div id="anRes"></div>
         ${pideAut ? `<label class="check"><input type="checkbox" id="anAut"><span>Confirmo que ${s.tipo === "cliente" ? "el cliente" : "la persona"} autorizó consultar sus antecedentes (Ley 1581 de 2012). Quedará registrado a mi nombre.</span></label>` : ""}
       </div>
-      <div class="modal-foot"><button class="btn" data-close>Cancelar</button><button class="btn btn-success" id="anSave" disabled>${I.check}Guardar resultado</button></div>`);
+      <div class="modal-foot"><button class="btn" data-close>Cancelar</button><button class="btn btn-success" id="anSave" disabled>${I.check}Guardar resultado</button></div>`, { onClose: () => { if (procu.actual && procu.actual.modal === s.id) procu.actual = null; } });
+    if (procu.cola) { procu.cola = null; $("#rrCola")?.remove(); }
     m.el.querySelector(".modal").style.maxWidth = "620px";
     const copiar = () => navigator.clipboard?.writeText(s.doc).then(() => RR.toast(`Cédula ${s.doc} copiada`), () => {});
     $("#anCopy", m.el).addEventListener("click", copiar);
-    $("#anOpen", m.el).addEventListener("click", () => { copiar(); window.open(URL_PROCU, "_blank", "noopener"); });
+    $("#anOpen", m.el).addEventListener("click", abrirProcu);
+    $("#anPaste", m.el).addEventListener("click", async () => {
+      try { const t = await navigator.clipboard.readText(); if (!t.trim()) throw 0; texto = t; $("#anTxt", m.el).value = t; leer(); }
+      catch (e) { RR.toast("No pude leer el portapapeles. Pégalo con Ctrl+V en el cuadro.", true); $("#anTxt", m.el).focus(); }
+    });
+    // Resultado enviado desde la Procuraduría con el botón ⭐ RodaRent.
+    procu.actual = {
+      doc: s.doc, nombre: s.nombre, modal: s.id,
+      recibir: async (t) => {
+        texto = t; $("#anTxt", m.el).value = t; await leer(); window.focus();
+        if (!lectura || !lectura.documento) return { guardado: false, mensaje: "No encontré el resultado en esta página. Pulsa Consultar primero y luego ⭐ RodaRent." };
+        if (!lectura.coincide_documento) return { guardado: false, mensaje: `Este resultado es de la cédula ${lectura.documento}, no de ${s.doc}.` };
+        if (pideAut && !$("#anAut", m.el).checked) return { guardado: false, mensaje: `Resultado enviado al panel (${ANT[lectura.estado][0]}). Marca allí la autorización y pulsa «Guardar resultado».` };
+        const g = await guardar();
+        return g ? { guardado: true, mensaje: `✓ Guardado en RodaRent: ${s.nombre} · ${ANT[g.lectura.estado][0]}${g.marcado ? " · requisito verificado" : ""}.` } : { guardado: false, mensaje: "No se pudo guardar. Revisa el panel." };
+      },
+    };
     const listo = () => { $("#anSave", m.el).disabled = !(lectura && lectura.coincide_documento && (!pideAut || $("#anAut", m.el).checked)); };
     if (pideAut) $("#anAut", m.el).addEventListener("change", listo);
 
@@ -813,12 +948,14 @@
     ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
     drop.addEventListener("drop", (e) => e.dataTransfer.files[0] && usarArchivo(e.dataTransfer.files[0]));
 
-    $("#anSave", m.el).addEventListener("click", async () => {
+    async function guardar() {
       const b = $("#anSave", m.el); b.disabled = true; b.textContent = "Guardando…";
       const r = await act("guardar_antecedentes", { sujeto: s.tipo, id: s.id, texto: texto.slice(0, 60000), autorizado: pideAut ? $("#anAut", m.el).checked : false, ...(archivo ? { archivo } : {}) });
       if (r) { m.close(); RR.toast(`${ANT[r.lectura.estado][0]} · ${s.nombre}${r.marcado ? " · requisito verificado" : ""}`); refresh(); }
       else { b.disabled = false; b.innerHTML = `${I.check}Guardar resultado`; }
-    });
+      return r;
+    }
+    $("#anSave", m.el).addEventListener("click", guardar);
     setTimeout(() => $("#anTxt", m.el).focus(), 50);
   }
 
