@@ -1,0 +1,15 @@
+{
+  "perfil": "https://www.instagram.com/alquilerde.vehiculos/",
+  "fotos": [
+    { "archivo": "toyota-prado-tx.jpg", "titulo": "Toyota Prado TX", "detalle": "Lujosa, full equipo", "claves": ["prado"], "post": "https://www.instagram.com/alquilerde.vehiculos/reel/DckePY5Pwrc/" },
+    { "archivo": "ford-escape-roja.jpg", "titulo": "Ford Escape", "detalle": "Roja, automática", "claves": ["escape", "scape"], "post": "https://www.instagram.com/alquilerde.vehiculos/p/Dckd380lREL/" },
+    { "archivo": "mazda-3-touring.jpg", "titulo": "Mazda 3 Touring", "detalle": "Gris, automático", "claves": ["mazda 3", "mazda3"], "post": "https://www.instagram.com/alquilerde.vehiculos/p/Dckdy0wFcVS/" },
+    { "archivo": "suzuki-fronx-hibrida.jpg", "titulo": "Suzuki Fronx", "detalle": "Híbrida, automática, gris", "claves": ["fronx"], "post": "https://www.instagram.com/alquilerde.vehiculos/p/DckdCCzlWxO/" },
+    { "archivo": "suzuki-dzire-hibrido.jpg", "titulo": "Suzuki Dzire", "detalle": "Híbrido, automático, sin pico y placa", "claves": ["dzire"], "post": "https://www.instagram.com/alquilerde.vehiculos/p/Dckc2YJFbHu/" },
+    { "archivo": "kia-picanto-gris.jpg", "titulo": "Kia Picanto", "detalle": "Gris, con planta de sonido", "claves": ["picanto"], "post": "https://www.instagram.com/alquilerde.vehiculos/p/DckdU57DtPl/" },
+    { "archivo": "chevrolet-beat-gris.jpg", "titulo": "Chevrolet Beat", "detalle": "Gris, rines de lujo", "claves": ["beat"], "post": "https://www.instagram.com/alquilerde.vehiculos/p/DckeArHFWIs/" },
+    { "archivo": "chevrolet-spark-gt-rojo.jpg", "titulo": "Chevrolet Spark GT", "detalle": "Rojo, full equipo", "claves": ["spark"], "post": "https://www.instagram.com/alquilerde.vehiculos/p/DckbgERjDTQ/" },
+    { "archivo": "vehiculo-playero-san-andres.jpg", "titulo": "Vehículo playero", "detalle": "Disponible en San Andrés Islas", "claves": ["playero", "buggy", "mula"], "post": "https://www.instagram.com/alquilerde.vehiculos/p/DckdsCsDqNs/" },
+    { "archivo": "moto-deportiva.webp", "titulo": "Moto deportiva", "detalle": "Pregunta disponibilidad", "claves": ["yamaha", "moto"], "post": "https://www.instagram.com/alquilerde.vehiculos/p/Dd2akwds5_T/" }
+  ]
+}

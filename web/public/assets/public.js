@@ -6,16 +6,18 @@
   let S = null; // { vehicles, reservations (solo periodos ocupados), settings }
   let st = null;
   let iaDisponible = false;
-  let verifikDisponible = false;
+  let galeria = null;
 
   /* ---------- Iconos estáticos ---------- */
-  $("#logoMark").innerHTML = I.car;
+  $("#logoMark").innerHTML = RR.marca;
+  $("#igIc").innerHTML = I.camara;
   ["#waIc1", "#waIc2", "#waIc3"].forEach((id) => ($(id).innerHTML = I.wa.replace("<svg", '<svg width="18" height="18"')));
   $("#fabIc").innerHTML = I.wa;
   $("#fIc1").innerHTML = I.check;
   $("#fIc2").innerHTML = I.chat;
-  $("#heroCar").innerHTML = RR.carSVG("suv", "#2546d8");
-  $("#trust").innerHTML = [["shield", "Seguro todo riesgo"], ["check", "Kilometraje libre en Antioquia"], ["clock", "Atención inmediata"]].map(([i, t]) => `<span>${I[i]}${t}</span>`).join("");
+  $("#heroCar").innerHTML = RR.carSVG("suv", "#24211b");
+  $("#trust").innerHTML = [["shield", "Vehículos asegurados"], ["pin", "Entrega a domicilio"], ["clock", "Servicio 24/7"]].map(([i, t]) => `<span>${I[i]}${t}</span>`).join("");
+  [["#dIc1", "pin", "Recogida donde estés, en Cali y alrededores"], ["#dIc2", "users", "Conductores del equipo, con experiencia"], ["#dIc3", "chat", "Te avisamos por el chat quién te recoge"]].forEach(([id, i, t]) => ($(id).innerHTML = `${I[i]}${t}`));
 
   async function cargarCatalogo() {
     const d = await RR.api("/api/catalogo");
@@ -23,9 +25,11 @@
     RR.store.state = S;
     st = d.settings;
     iaDisponible = d.iaDisponible;
-    verifikDisponible = !!d.verifikDisponible;
+    galeria = d.galeria;
     RR.setBusiness(d.negocio, d.settings);
     document.querySelectorAll("[data-negocio]").forEach((el) => (el.textContent = d.negocio.nombre));
+    if (d.negocio.lema) document.querySelectorAll("[data-lema]").forEach((el) => (el.textContent = d.negocio.lema));
+    document.title = `${d.negocio.nombre} · ${d.negocio.ciudad}`;
   }
 
   /* ---------- Búsqueda ---------- */
@@ -58,15 +62,43 @@
 
   function renderGrid() {
     const dias = RR.days(search.start, search.end);
-    const list = S.vehicles.filter((v) => search.type === "all" || v.tipo === search.type);
-    const avail = list.filter((v) => RR.isAvailable(v, search.start, search.end));
-    $("#availNote").innerHTML = `${I.cal}<span><b>${avail.length} de ${list.length}</b> disponibles del <b>${RR.fmtDT(search.start)}</b> al <b>${RR.fmtDT(search.end)}</b> (${dias} ${dias === 1 ? "día" : "días"})</span>`;
-    list.sort((a, b) => RR.isAvailable(b, search.start, search.end) - RR.isAvailable(a, search.start, search.end) || a.precio - b.precio);
-    $("#grid").innerHTML = list.map((v) => {
+    const todos = S.vehicles.filter((v) => search.type === "all" || v.tipo === search.type);
+    const avail = todos.filter((v) => RR.isAvailable(v, search.start, search.end));
+    $("#availNote").innerHTML = `${I.cal}<span><b>${avail.length} de ${todos.length}</b> disponibles del <b>${RR.fmtDT(search.start)}</b> al <b>${RR.fmtDT(search.end)}</b> (${dias} ${dias === 1 ? "día" : "días"})</span>`;
+    const orden = (a, b) => RR.isAvailable(b, search.start, search.end) - RR.isAvailable(a, search.start, search.end) || a.precio - b.precio;
+    // Catálogo propio y, aparte, el de la agencia aliada.
+    const propios = todos.filter((v) => v.modalidad !== "agencia").sort(orden);
+    const agencia = todos.filter((v) => v.modalidad === "agencia").sort(orden);
+    $("#grid").innerHTML = tarjetas(propios, dias) || (S.vehicles.length
+      ? `<div class="empty">No hay vehículos de este tipo.</div>`
+      : `<div class="empty">Estamos actualizando el catálogo en línea. Mira las fotos de nuestros carros aquí abajo y cotiza por el chat: te respondemos al instante. <a href="#galeria" style="color:var(--brand);font-weight:700">Ver fotos</a></div>`);
+    $("#agBlock").classList.toggle("hidden", !agencia.length);
+    $("#gridAg").innerHTML = tarjetas(agencia, dias);
+    $$("[data-book]").forEach((b) => b.addEventListener("click", () => openBooking(b.dataset.book)));
+    $$("[data-fotos]").forEach((b) => b.addEventListener("click", () => { const v = RR.get.vehicle(b.dataset.fotos); RR.verFotos(v.fotos, `${v.marca} ${v.modelo} · ${RR.money(v.precio)} / día`); }));
+  }
+  /* ---------- Galería: fotos del Instagram del negocio ---------- */
+  function renderGaleria(g) {
+    const box = $("#galeria");
+    if (!g || !g.fotos.length) { box.classList.add("hidden"); return; }
+    box.classList.remove("hidden");
+    $("#igLink").href = g.perfil;
+    $("#igGrid").innerHTML = g.fotos.map((f, i) => `<figure class="ig-item">
+        <button class="ig-foto" data-ig="${i}" aria-label="Ver foto: ${RR.esc(f.titulo)}"><img src="${RR.esc(f.url)}" alt="${RR.esc(f.titulo)} · ${RR.esc(f.detalle)}" loading="lazy"></button>
+        <figcaption><b>${RR.esc(f.titulo)}</b><span>${RR.esc(f.detalle)}</span></figcaption>
+        <button class="btn btn-sm" data-cotizar="${RR.esc(f.titulo)}">${I.chat}Cotizar</button>
+      </figure>`).join("");
+    $$("[data-ig]").forEach((b) => b.addEventListener("click", () => RR.verFotos(g.fotos.map((f) => f.url), "Nuestros vehículos", +b.dataset.ig)));
+    $$("[data-cotizar]").forEach((b) => b.addEventListener("click", async () => { openChat(); await chat.listo; if (!chat.enviando) enviar(`Quiero cotizar el ${b.dataset.cotizar}`); }));
+  }
+  function tarjetas(list, dias) {
+    return list.map((v) => {
       const ok = RR.isAvailable(v, search.start, search.end);
       const why = v.estado === "mantenimiento" ? "En mantenimiento" : "No disponible en esas fechas";
       return `<article class="card car ${ok ? "" : "unavailable"}">
-        <div class="car-art">${ok ? '<span class="badge b-ok">Disponible</span>' : `<span class="badge b-neutral">${why}</span>`}${v.destacado && ok ? `<span class="tag-hot">${RR.esc(v.destacado)}</span>` : ""}${RR.carSVG(v.tipo, v.color)}</div>
+        <div class="car-art ${v.fotos.length ? "con-foto" : ""}">${ok ? '<span class="badge b-ok">Disponible</span>' : `<span class="badge b-neutral">${why}</span>`}${v.destacado && ok ? `<span class="tag-hot">${RR.esc(v.destacado)}</span>` : ""}${v.fotos.length
+          ? `<img class="car-foto" src="${RR.esc(v.fotos[0])}" alt="${RR.esc(v.marca)} ${RR.esc(v.modelo)}" loading="lazy"><button class="ver-fotos" data-fotos="${v.id}" aria-label="Ver fotos del ${RR.esc(v.marca)} ${RR.esc(v.modelo)}"></button>${v.fotos.length > 1 ? `<span class="n-fotos">${v.fotos.length} fotos</span>` : ""}`
+          : RR.carSVG(v.tipo, v.color)}</div>
         <div class="body">
           <div><div class="name">${RR.esc(v.marca)} ${RR.esc(v.modelo)}</div><div class="small subtle">${RR.TYPE_LABEL[v.tipo]} · ${v.anio}</div></div>
           ${specs(v)}
@@ -76,8 +108,7 @@
           </div>
         </div>
       </article>`;
-    }).join("") || `<div class="empty">No hay vehículos de este tipo.</div>`;
-    $$("[data-book]").forEach((b) => b.addEventListener("click", () => openBooking(b.dataset.book)));
+    }).join("");
   }
 
   /* ---------- Requisitos, condiciones y FAQ ---------- */
@@ -94,14 +125,15 @@
     $("#condList").innerHTML = [
       ["clock", "Alquiler por días de 24 horas", "Retrasos mayores a 2 horas pueden cobrarse como día adicional."],
       ["fuel", "Combustible", "Se entrega con tanque lleno y debe devolverse igual."],
-      ["pin", "Cobertura", "Kilometraje libre dentro de Antioquia. Viajes fuera del departamento, con previo aviso."],
+      ["pin", "Cobertura", "Kilometraje libre dentro del Valle del Cauca. Desde 15 días puedes viajar a cualquier ciudad; en alquileres más cortos, los viajes largos se acuerdan antes con un asesor."],
       ["shield", "Seguro", "SOAT y seguro todo riesgo incluidos, con deducible según póliza."],
       ["x", "Cancelación", "Sin costo hasta 48 horas antes de la recogida."],
     ].map(([i, t, d]) => `<li><span class="ic">${I[i]}</span><div><b>${t}</b><div class="muted">${d}</div></div></li>`).join("");
     const FAQ = [
       ["¿Cuánto tiempo apartan el vehículo?", `Cuando envías tu solicitud, el vehículo queda pre-reservado por ${st.prereservaHoras} horas mientras verificamos tus documentos. Si no se completa en ese plazo, se libera automáticamente.`],
       ["¿Cuándo me devuelven el depósito?", "Se reembolsa al devolver el vehículo, una vez revisado su estado. Si fue con tarjeta, el banco puede tardar de 3 a 8 días hábiles."],
-      ["¿Me lo pueden llevar a domicilio o al aeropuerto?", "Sí. Entregamos en el aeropuerto, la terminal o a domicilio con un costo adicional."],
+      ["¿Me lo pueden llevar a domicilio o al aeropuerto?", "Sí. Te lo llevamos al aeropuerto Alfonso Bonilla Aragón, a la terminal o a tu casa en Cali."],
+      ["¿Tienen servicio con conductor?", "Sí. Escríbele al asistente a dónde vas, desde dónde y a qué hora. Tu pedido les llega a nuestros conductores por WhatsApp y te avisamos por el chat quién te recoge."],
       ["¿Puede manejar otra persona?", "Sí, registrándola como conductor adicional. Debe cumplir los mismos requisitos."],
       ["¿Puedo viajar con mascotas?", "Sí, con guacal o cobertor de silla. Se cobra limpieza si el vehículo se devuelve sucio."],
       ["¿Cómo protegen mis datos?", "Solo pedimos lo necesario para el alquiler, con tu autorización y conforme a la Ley 1581 de 2012. Puedes pedir que actualicemos o eliminemos tus datos."],
@@ -115,7 +147,6 @@
         <p><b>Texto base:</b> debe revisarlo un abogado antes de publicarse.</p>
         <p>Autorizo a ${RR.esc(RR.BUSINESS.name)} a tratar mis datos personales (nombre, documento, contacto, licencia y documentos aportados) con la finalidad exclusiva de gestionar mi solicitud de alquiler, verificar requisitos, celebrar y ejecutar el contrato y enviarme comunicaciones sobre mi reserva.</p>
         <p>Los documentos se almacenan con acceso restringido y se eliminan ${st.retencionDias} días después de finalizado el servicio, salvo obligación legal. Puedo conocer, actualizar, rectificar y suprimir mis datos escribiendo al canal de atención.</p>
-        <p>Cualquier consulta de antecedentes se hará solo con autorización expresa adicional, finalidad legítima y a través de mecanismos legalmente permitidos.</p>
         <p>Las comunicaciones comerciales solo se envían si las autorizo por separado.</p>
       </div>
       <div class="modal-foot"><button class="btn btn-primary" data-close>Entendido</button></div>`);
@@ -145,7 +176,7 @@
       if (b.step === 1) {
         root.innerHTML = head("Revisa tu reserva", "Paso 1 de 3 · Fechas y precio") + `
           <div class="modal-body stack">
-            <div class="sum"><div class="art">${RR.carSVG(v.tipo, v.color)}</div><div><div class="bold">${RR.esc(v.marca)} ${RR.esc(v.modelo)} · ${v.anio}</div>${specs(v)}</div></div>
+            <div class="sum"><div class="art">${v.fotos.length ? `<img src="${RR.esc(v.fotos[0])}" alt="" style="width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:8px;display:block">` : RR.carSVG(v.tipo, v.color)}</div><div><div class="bold">${RR.esc(v.marca)} ${RR.esc(v.modelo)} · ${v.anio}</div>${specs(v)}</div></div>
             <div class="form-grid">
               <div class="field full"><label for="bLoc">Lugar de recogida</label><select class="select" id="bLoc">${RR.BUSINESS.locations.map((l) => `<option ${l === b.loc ? "selected" : ""}>${RR.esc(l)}</option>`).join("")}</select></div>
               <div class="field"><label for="bStart">Recogida</label><input class="input" type="datetime-local" id="bStart" value="${RR.toLocalInput(b.start)}"></div>
@@ -186,8 +217,7 @@
               ${!hab || b.habitual ? `<div class="field full"><label for="fNotes">Comentarios (opcional)</label><textarea class="textarea" id="fNotes" placeholder="Ej.: necesito silla para bebé">${RR.esc(d.notas || "")}</textarea></div>
               ${hab ? "" : '<p class="help full">Después de enviar, un asesor te pedirá la foto de tu cédula y licencia por un canal seguro.</p>'}
               <label class="check full"><input type="checkbox" id="fConsent" ${d.consent ? "checked" : ""}><span>Autorizo el tratamiento de mis datos personales para gestionar esta solicitud, según la <a href="/privacidad" target="_blank" style="color:var(--brand);font-weight:600">política de privacidad</a>.</span></label>
-              <label class="check full"><input type="checkbox" id="fMkt" ${d.mkt ? "checked" : ""}><span>Quiero recibir recordatorios y promociones por WhatsApp (opcional).</span></label>
-              ${verifikDisponible ? `<label class="check full"><input type="checkbox" id="fVerif" ${d.verif ? "checked" : ""}><span><b>Agilizar mi reserva (opcional):</b> autorizo consultar mi licencia en el RUNT y mis antecedentes en la Policía y la Procuraduría con mi documento. Si no lo autorizas, un asesor revisa tus documentos.</span></label>` : ""}` : ""}`;
+              <label class="check full"><input type="checkbox" id="fMkt" ${d.mkt ? "checked" : ""}><span>Quiero recibir recordatorios y promociones por WhatsApp (opcional).</span></label>` : ""}`;
         root.innerHTML = head("Tus datos", "Paso 2 de 3 · Información del conductor principal") + `
           <form class="modal-body stack" id="bForm" novalidate>
             <div class="seg" style="width:100%"><button type="button" style="flex:1" data-modo="nuevo" class="${!hab ? "active" : ""}">Soy cliente nuevo</button><button type="button" style="flex:1" data-modo="habitual" class="${hab ? "active" : ""}">Ya he alquilado antes</button></div>
@@ -197,7 +227,7 @@
           <div class="modal-foot"><button class="btn" id="bBack">${I.back} Atrás</button><button class="btn btn-primary" id="bSend" ${hab && !b.habitual ? "disabled" : ""}>Enviar solicitud</button></div>`;
         const val = (id) => { const el = $(id, root); return el ? (el.type === "checkbox" ? el.checked : el.value.trim()) : undefined; };
         const collect = () => {
-          const m = { nombre: val("#fName"), docNum: val("#fDoc"), birth: val("#fBirth"), tel: val("#fTel"), email: val("#fEmail"), lic: val("#fLic"), licV: val("#fLicV"), notas: val("#fNotes"), consent: val("#fConsent"), mkt: val("#fMkt"), verif: val("#fVerif") };
+          const m = { nombre: val("#fName"), docNum: val("#fDoc"), birth: val("#fBirth"), tel: val("#fTel"), email: val("#fEmail"), lic: val("#fLic"), licV: val("#fLicV"), notas: val("#fNotes"), consent: val("#fConsent"), mkt: val("#fMkt") };
           Object.keys(m).forEach((k) => { if (m[k] !== undefined) d[k] = m[k]; });
         };
         $$("[data-modo]", root).forEach((btn) => btn.addEventListener("click", () => { collect(); b.modo = btn.dataset.modo; b.habitual = null; render(); }));
@@ -242,7 +272,7 @@
             const r = await RR.api("/api/reservas", {
               habitual: hab, vehiculo: v.id, inicio: b.start, fin: b.end, lugar: b.loc, documento: d2.docNum, telefono: d2.tel,
               nombre: opt("#fName", d2.nombre), email: opt("#fEmail", d2.email), nacimiento: opt("#fBirth", d2.birth), licencia: opt("#fLic", d2.lic), licenciaVence: opt("#fLicV", d2.licV),
-              notas: d2.notas || "", consentimiento: true, marketing: !!d2.mkt, verificar: !!d2.verif,
+              notas: d2.notas || "", consentimiento: true, marketing: !!d2.mkt,
             });
             b.res = r; b.step = 3; render();
             cargarCatalogo().then(renderGrid).catch(() => {});
@@ -284,18 +314,20 @@
 
   function openChat() {
     chat.open = true; panel.classList.remove("hidden"); $("#fabHint").classList.add("hidden"); $(".fab .ping").classList.add("hidden");
-    if (!chat.built) { buildPanel(); chat.built = true; iniciar(); }
+    if (!chat.built) { buildPanel(); chat.built = true; chat.listo = iniciar(); }
     iniciarSondeo();
     setTimeout(() => $("#waText") && $("#waText").focus(), 50);
   }
   function closeChat() { chat.open = false; panel.classList.add("hidden"); clearInterval(chat.poll); }
   $("#fab").addEventListener("click", () => (chat.open ? closeChat() : openChat()));
   $$("[data-open-chat]").forEach((b) => b.addEventListener("click", openChat));
+  // "Solicitar un conductor": abre el chat y el asistente toma los datos del viaje y se los envía a los conductores.
+  $$("[data-conductor]").forEach((b) => b.addEventListener("click", async () => { openChat(); await chat.listo; if (!chat.enviando) enviar("Quiero solicitar un servicio con conductor"); }));
   setTimeout(() => $("#fabHint") && $("#fabHint").classList.add("hidden"), 9000);
 
   function buildPanel() {
     panel.innerHTML = `<div class="wa">
-      <div class="wa-head"><div class="wa-avatar">${I.car}</div><div><div class="wa-title">${RR.esc(RR.BUSINESS.name)}</div><div class="wa-sub" id="waStatus">en línea · asistente virtual</div></div><button class="x" id="waClose" aria-label="Cerrar">${I.x}</button></div>
+      <div class="wa-head"><div class="wa-avatar" style="background:var(--ink);color:var(--gold)">${RR.marca.replace("<svg", '<svg width="24" height="15"')}</div><div><div class="wa-title">${RR.esc(RR.BUSINESS.name)}</div><div class="wa-sub" id="waStatus">en línea · asistente virtual</div></div><button class="x" id="waClose" aria-label="Cerrar">${I.x}</button></div>
       <div class="wa-body" id="waBody" aria-live="polite"></div>
       <form class="wa-input" id="waForm"><input id="waText" placeholder="Escribe un mensaje" autocomplete="off" maxlength="1500"><button class="wa-send" aria-label="Enviar">${I.send}</button></form>
       <div class="wa-note">Asistente con IA · un asesor humano revisa y confirma cada reserva</div>
@@ -317,7 +349,7 @@
   }
   function sugerencias() {
     const q = document.createElement("div"); q.className = "quick";
-    [["Quiero cotizar un vehículo", "Quiero cotizar un vehículo"], ["Ver precios", "¿Cuáles son los precios?"], ["Ya soy cliente", "Ya he alquilado con ustedes antes y quiero reservar de nuevo"], ["Consultar mi reserva", "Quiero consultar mi reserva"], ["Requisitos", "¿Qué requisitos piden?"]]
+    [["Quiero cotizar un vehículo", "Quiero cotizar un vehículo"], ["Solicitar un conductor", "Quiero solicitar un servicio con conductor"], ["Ver precios", "¿Cuáles son los precios?"], ["Ya soy cliente", "Ya he alquilado con ustedes antes y quiero reservar de nuevo"], ["Consultar mi reserva", "Quiero consultar mi reserva"], ["Requisitos", "¿Qué requisitos piden?"]]
       .forEach(([l, t]) => { const b = document.createElement("button"); b.type = "button"; b.textContent = l; b.addEventListener("click", () => { q.remove(); enviar(t); }); q.appendChild(b); });
     body().appendChild(q); scroll();
   }
@@ -331,7 +363,7 @@
         if (d.mensajes.length) return;
       } catch (e) { chat.conv = null; try { localStorage.removeItem(CONV_KEY); } catch (_) {} }
     }
-    burbuja("ia", `¡Hola! 👋 Soy el asistente virtual de ${RR.BUSINESS.name}. Te ayudo a cotizar, revisar disponibilidad y reservar. ¿En qué te ayudo?`);
+    burbuja("ia", `¡Hola! 👋 Soy el asistente virtual de ${RR.BUSINESS.name}. Te ayudo a cotizar y reservar un vehículo, o a pedir un servicio con conductor. ¿En qué te ayudo?`);
     if (!iaDisponible) burbuja("sistema", "El asistente automático no está activo en este momento. Escríbenos y un asesor te responderá, o usa el formulario de reserva.");
     sugerencias();
   }
@@ -378,7 +410,7 @@
   (async function () {
     try {
       await cargarCatalogo();
-      renderInfo(); renderChips(); renderGrid();
+      renderInfo(); renderChips(); renderGrid(); renderGaleria(galeria);
     } catch (e) {
       $("#grid").innerHTML = `<div class="empty">No pudimos cargar el catálogo. Revisa tu conexión y recarga la página.</div>`;
     }

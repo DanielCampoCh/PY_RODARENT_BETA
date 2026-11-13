@@ -121,20 +121,6 @@ create table if not exists whatsapp_procesados (
 );
 create unique index if not exists conversaciones_whatsapp_tel on conversaciones (telefono) where canal = 'whatsapp' and estado <> 'cerrada';
 
--- Verificación con fuentes oficiales (Verifik): autorización aparte y traza de cada consulta.
-alter table clientes add column if not exists consentimiento_antecedentes timestamptz;
-create table if not exists verificaciones_externas (
-  id bigserial primary key,
-  cliente_id uuid not null references clientes (id) on delete cascade,
-  fuente text not null,
-  resultado text not null check (resultado in ('ok', 'hallazgo', 'no_encontrado', 'error', 'no_aplica')),
-  detalle text not null,
-  referencia text,
-  actor text not null,
-  fecha timestamptz not null default now()
-);
-create index if not exists verificaciones_cliente_idx on verificaciones_externas (cliente_id, fecha desc);
-
 create table if not exists auditoria (
   id bigserial primary key,
   actor text not null,
@@ -166,39 +152,84 @@ begin
   return n;
 end $$;
 
--- Personal del negocio (para validar su cédula en la Procuraduría).
-create table if not exists personal (
+-- ---------- Flota: datos de la hoja "Registro de vehículos" del negocio ----------
+-- modalidad: alquiler (catálogo y reservas), uber (solo control interno y alertas), agencia (catálogo aliado con comisión).
+alter table vehiculos add column if not exists modalidad text not null default 'alquiler';
+alter table vehiculos drop constraint if exists vehiculos_modalidad_check;
+alter table vehiculos add constraint vehiculos_modalidad_check check (modalidad in ('alquiler', 'uber', 'agencia'));
+-- Los carros de Uber y los recién importados pueden no tener tarifa (0 = no se ofrecen en el catálogo).
+alter table vehiculos drop constraint if exists vehiculos_precio_dia_check;
+alter table vehiculos add constraint vehiculos_precio_dia_check check (precio_dia >= 0);
+alter table vehiculos add column if not exists codigo text not null default '';
+alter table vehiculos add column if not exists color_nombre text not null default '';
+alter table vehiculos add column if not exists responsable text not null default '';
+alter table vehiculos add column if not exists responsable_tel text not null default '';
+alter table vehiculos add column if not exists gps text not null default '';
+alter table vehiculos add column if not exists gps_recarga date;
+alter table vehiculos add column if not exists soat_vence date;
+alter table vehiculos add column if not exists tecno_vence date;
+alter table vehiculos add column if not exists seguro_vence date;
+alter table vehiculos add column if not exists aseguradora text not null default '';
+alter table vehiculos add column if not exists extintor_vence date;
+alter table vehiculos add column if not exists impuesto_vence date;
+alter table vehiculos add column if not exists km_actual int;
+alter table vehiculos add column if not exists km_aceite int;
+alter table vehiculos add column if not exists agencia text not null default '';
+alter table vehiculos add column if not exists comision_pct numeric(5, 2);
+alter table vehiculos add column if not exists notas text not null default '';
+
+-- Alertas de la flota ya avisadas (para no repetir la misma notificación).
+create table if not exists alertas_avisadas (
+  clave text primary key,
+  fecha timestamptz not null default now()
+);
+
+-- ---------- Conductores: reciben los servicios por WhatsApp y el primero que pulsa «Tomar servicio» se lo queda ----------
+create table if not exists conductores (
   id uuid primary key default gen_random_uuid(),
   nombre text not null,
-  documento text not null unique,
-  cargo text not null default '',
-  telefono text,
+  telefono text not null unique,
   activo boolean not null default true,
+  notas text not null default '',
   creado_en timestamptz not null default now()
 );
 
--- Consultas de antecedentes hechas por una persona del equipo en la página oficial de la Procuraduría.
--- El sistema solo lee el resultado que el asesor pega o el certificado PDF que sube.
-create table if not exists consultas_antecedentes (
-  id bigserial primary key,
-  cliente_id uuid references clientes (id) on delete cascade,
-  personal_id uuid references personal (id) on delete cascade,
-  documento text not null,
-  nombre_certificado text not null default '',
-  primer_nombre text not null default '',
-  segundo_nombre text not null default '',
-  primer_apellido text not null default '',
-  segundo_apellido text not null default '',
-  estado text not null check (estado in ('limpio', 'con_antecedentes', 'no_encontrado', 'revisar')),
-  coincide_documento boolean not null default false,
-  coincide_nombre boolean,
-  detalle text not null default '',
-  texto text not null default '',
-  archivo bytea,
-  archivo_tipo text,
-  archivo_nombre text,
-  actor text not null,
-  fecha timestamptz not null default now(),
-  check ((cliente_id is null) <> (personal_id is null))
+-- ---------- Servicios de conductor ----------
+create sequence if not exists servicio_codigo_seq start 101;
+create table if not exists servicios (
+  id uuid primary key default gen_random_uuid(),
+  codigo text not null unique default ('SC-' || nextval('servicio_codigo_seq')),
+  conversacion_id uuid references conversaciones (id) on delete set null,
+  cliente_id uuid references clientes (id) on delete set null,
+  nombre text not null,
+  telefono text not null,
+  origen text not null,
+  destino text not null,
+  fecha timestamptz not null,
+  pasajeros int not null default 1 check (pasajeros between 1 and 50),
+  notas text not null default '',
+  estado text not null default 'nuevo' check (estado in ('nuevo', 'tomado', 'completado', 'cancelado')),
+  conductor text,
+  conductor_tel text,
+  tomado_en timestamptz,
+  enviados int not null default 0,
+  canal text not null default 'chat' check (canal in ('chat', 'whatsapp', 'manual')),
+  creado_en timestamptz not null default now()
 );
-create index if not exists consultas_antecedentes_fecha_idx on consultas_antecedentes (fecha desc);
+create index if not exists servicios_fecha_idx on servicios (fecha desc);
+alter table servicios add column if not exists conductor_tel text;
+alter table servicios add column if not exists enviados int not null default 0;
+
+-- ---------- Fotos de los vehículos ----------
+-- Fotos subidas desde el panel (datos) o tomadas de la galería del negocio en /public/fotos (url). La de orden menor es la principal.
+create table if not exists vehiculo_fotos (
+  id bigserial primary key,
+  vehiculo_id uuid not null references vehiculos (id) on delete cascade,
+  orden int not null default 0,
+  url text,
+  datos bytea,
+  tipo text not null default 'image/jpeg',
+  creado_en timestamptz not null default now(),
+  check ((url is null) <> (datos is null))
+);
+create index if not exists vehiculo_fotos_veh_idx on vehiculo_fotos (vehiculo_id, orden);

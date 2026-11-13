@@ -1,6 +1,4 @@
-import { after, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { verificarCliente, verifikActivo } from "@/lib/verifik";
+import { NextResponse } from "next/server";
 import { z } from "zod";
 import { ajustes, clientePorDocYTel, crearReserva, upsertCliente } from "@/lib/repo";
 import { excedeLimite, ipDe } from "@/lib/limite";
@@ -23,8 +21,6 @@ const Body = z.object({
   notas: z.string().max(500).optional().default(""),
   consentimiento: z.literal(true, { message: "Debes autorizar el tratamiento de datos." }),
   marketing: z.boolean().optional().default(false),
-  // Autorización aparte para consultar licencia (RUNT) y antecedentes (Policía, Procuraduría).
-  verificar: z.boolean().optional().default(false),
 });
 
 /** Solicitud de reserva desde el sitio público. Valida requisitos en el servidor. */
@@ -70,11 +66,6 @@ export async function POST(req: Request) {
   const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: d.vehiculo, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen: "web", notas: [d.notas, c.alerta].filter(Boolean).join(" · "), actor: d.habitual ? "Cliente habitual (web)" : "Cliente (web)" });
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: 409 });
   const res = r.reserva;
-  if (d.verificar && verifikActivo()) {
-    await db()`update clientes set consentimiento_antecedentes = coalesce(consentimiento_antecedentes, now()) where id = ${c.cliente.id}`;
-    const clienteId = c.cliente.id as string, fin = new Date(res.fin).toISOString();
-    after(async () => { try { await verificarCliente(clienteId, "Verificación automática (web)", fin); } catch (e) { console.error("[verifik]", e instanceof Error ? e.message : e); } });
-  }
   return NextResponse.json({ codigo: res.codigo, inicio: res.inicio, fin: res.fin, total: res.total, expira: res.expira_en, estado: res.estado, // Con celular distinto no se revela el nombre registrado: se usa el que escribió quien reserva.
     nombre: String(c.alerta ? datos.nombre : c.cliente.nombre).split(" ")[0] });
 }

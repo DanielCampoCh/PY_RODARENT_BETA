@@ -27,10 +27,14 @@ services:
       - key: CLAUDE_MODEL
         value: claude-haiku-5-5
       - key: NEGOCIO_NOMBRE
-        value: Autos del Valle
+        value: Alquiler de Vehículos BP
+      - key: NEGOCIO_LEMA
+        value: Todas las gamas
       - key: NEGOCIO_CIUDAD
-        value: Medellín
+        value: Cali
       - key: NEGOCIO_WHATSAPP
         sync: false
+      - key: CRON_SECRET
+        generateValue: true
       # WhatsApp Business: WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_APP_SECRET y
       # WHATSAPP_VERIFY_TOKEN se configuran a mano en Render (en el servicio o en un Environment Group).

@@ -11,23 +11,23 @@
   <style>
     body { background: var(--bg); }
     .app { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
-    aside.side { background: #0c1222; color: #c7cbd6; display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; padding: 16px 12px; z-index: 60; }
+    aside.side { background: var(--ink); color: #c7cbd6; display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; padding: 16px 12px; z-index: 60; }
     .side .brand { display: flex; align-items: center; gap: 10px; padding: 6px 10px 18px; color: #fff; font-weight: 800; font-size: 17px; letter-spacing: -0.02em; }
-    .side .brand .mk { width: 32px; height: 32px; border-radius: 9px; background: var(--brand); display: grid; place-items: center; }
+    .side .brand .mk { width: 32px; height: 32px; border-radius: 9px; background: var(--gold); color: var(--ink); display: grid; place-items: center; }
     .side .brand .mk svg { width: 19px; height: 19px; }
-    .side .brand small { display: block; font-size: 11px; font-weight: 500; color: #7d8597; letter-spacing: 0; }
+    .side .brand small { display: block; font-size: 11px; font-weight: 500; color: #b9a46a; letter-spacing: 0; }
     .side nav { display: flex; flex-direction: column; gap: 2px; }
     .side nav a { display: flex; align-items: center; gap: 11px; padding: 9px 10px; border-radius: 8px; font-size: 14px; font-weight: 500; color: #aab0bf; transition: background .12s, color .12s; }
     .side nav a svg { width: 18px; height: 18px; }
     .side nav a:hover { background: rgba(255,255,255,.06); color: #fff; }
-    .side nav a.active { background: rgba(255,255,255,.1); color: #fff; }
+    .side nav a.active { background: rgba(227,171,18,.16); color: #f5d67a; }
     .side nav a .cnt { margin-left: auto; font-size: 11px; font-weight: 700; background: #f04438; color: #fff; border-radius: 999px; padding: 1px 7px; }
     .side nav a .cnt.soft { background: rgba(255,255,255,.12); color: #d0d5dd; }
     .side .sep { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #5d6577; padding: 16px 10px 6px; font-weight: 600; }
     .side .bottom { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
     .side .me { display: flex; gap: 10px; align-items: center; padding: 10px; border-radius: 10px; background: rgba(255,255,255,.05); }
     .avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; flex-shrink: 0; background: var(--brand-100); color: var(--brand); }
-    .side .me .avatar { background: #2a3550; color: #fff; }
+    .side .me .avatar { background: #3a3122; color: #f5d67a; }
     .side .me b { color: #fff; font-size: 13px; display: block; }
     .side .me span { font-size: 12px; color: #8a91a2; }
     .side .linkbtn { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #8a91a2; padding: 7px 10px; border-radius: 8px; background: none; border: 0; width: 100%; text-align: left; }

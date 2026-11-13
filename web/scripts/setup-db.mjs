@@ -12,6 +12,10 @@ config();
 const { url, host, error } = limpiarDatabaseUrl(process.env.DATABASE_URL);
 if (!url) { console.error(error); process.exit(1); }
 console.log(`Base de datos: ${host}`);
+const LUGARES_CALI = ["Aeropuerto Alfonso Bonilla Aragón (Cali)", "Entrega a domicilio en Cali", "Terminal de Transportes de Cali"];
+// Pico y placa de Cali, segundo semestre de 2026 (lunes a viernes, 6:00 a. m. a 7:00 p. m.). Se edita en Ajustes cada semestre.
+const PICO_PLACA_CALI = { 1: [9, 0], 2: [1, 2], 3: [3, 4], 4: [5, 6], 5: [7, 8] };
+const LUGARES_MEDELLIN = ["Oficina principal (El Poblado)", "Aeropuerto José María Córdova", "Terminal del Sur", "Domicilio (costo adicional)"];
 const sql = postgres(url, { prepare: false, max: 1, onnotice: () => {} });
 const reset = process.argv.includes("--reset");
 
@@ -29,23 +33,28 @@ const fromNow = (h) => new Date(Date.now() + h * 3600000).toISOString();
 async function main() {
   if (reset) {
     console.log("Borrando tablas…");
-    await sql.unsafe(`drop table if exists notificaciones, auditoria, mensajes, conversaciones, reserva_historial, reservas, clientes, vehiculos, configuracion, usuarios cascade;
-      drop sequence if exists reserva_codigo_seq; drop function if exists expirar_prereservas();`);
+    await sql.unsafe(`drop table if exists vehiculo_fotos, conductores, servicios, alertas_avisadas, notificaciones, auditoria, mensajes, conversaciones, reserva_historial, reservas, clientes, vehiculos, configuracion, usuarios cascade;
+      drop sequence if exists reserva_codigo_seq, servicio_codigo_seq; drop function if exists expirar_prereservas();`);
   }
   console.log("Creando esquema…");
   await sql.unsafe(readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8"));
 
   await sql`insert into configuracion (clave, valor) values ('ajustes', ${sql.json({
     prereservaHoras: 24, edadMinima: 21, licenciaVigente: true, categorias: ["B1", "B2", "C1"], depositoObligatorio: true,
-    experienciaMin: 2, experienciaActiva: false, docAdicional: false, retencionDias: 90, recordatorioHoras: 24, antecedentesActiva: false,
-    lugares: ["Oficina principal (El Poblado)", "Aeropuerto José María Córdova", "Terminal del Sur", "Domicilio (costo adicional)"],
+    experienciaMin: 2, experienciaActiva: false, docAdicional: false, retencionDias: 90, recordatorioHoras: 24, picoPlaca: PICO_PLACA_CALI,
+    lugares: LUGARES_CALI,
     horario: "Lun a Sáb · 7:00 a. m. – 7:00 p. m.",
   })}) on conflict (clave) do nothing`;
+  // Ajustes nuevos: pico y placa (si no existe) y se quita el requisito de antecedentes (lo reemplaza otro módulo).
+  await sql`update configuracion set valor = (valor - 'antecedentesActiva') || jsonb_build_object('picoPlaca', coalesce(valor->'picoPlaca', ${sql.json(PICO_PLACA_CALI)}::jsonb)) where clave = 'ajustes'`;
+  // El negocio opera en Cali: si los lugares siguen siendo los de ejemplo de Medellín, se reemplazan (no toca lugares editados).
+  await sql`update configuracion set valor = jsonb_set(valor, '{lugares}', ${sql.json(LUGARES_CALI)}) where clave = 'ajustes' and valor->'lugares' = ${sql.json(LUGARES_MEDELLIN)}::jsonb`;
 
   const [{ n }] = await sql`select count(*)::int as n from vehiculos`;
   if (process.argv.includes("--sin-ejemplos")) console.log("Sin datos de ejemplo (--sin-ejemplos).");
   else if (n === 0) await seed();
   else console.log("La base ya tiene datos: no se cargan ejemplos.");
+  await cargarFlotaInstagram();
 
   for (const [email, pw, nombre, rol] of [
     [process.env.ADMIN_EMAIL, process.env.ADMIN_PASSWORD, process.env.ADMIN_NOMBRE || "Administrador", "admin"],
@@ -59,6 +68,45 @@ async function main() {
   }
   console.log("Listo.");
   await sql.end();
+}
+
+/**
+ * Una sola vez: carga la flota real que el negocio publica en Instagram y deja inactivos los carros de ejemplo.
+ * Los carros reales quedan INACTIVOS con placa provisional (POR-00X) y sin tarifa: no salen en la página hasta que
+ * en el panel se les ponga placa, año, tarifa y estado «Disponible». La foto la toman solos por el nombre.
+ */
+const PLACAS_EJEMPLO = ["JKM-482", "LQT-215", "HZR-907", "GTP-330", "NBV-118", "KYD-764", "MRS-551", "PLX-209"];
+async function cargarFlotaInstagram() {
+  const [hecho] = await sql`select 1 from configuracion where clave = 'flota_instagram'`;
+  if (hecho) return;
+  const pendiente = "Cargado desde Instagram. Por confirmar: placa, año y tarifa.";
+  const F = [
+    // marca, línea, tipo, puestos, maletas, transmisión, combustible, color (nombre), color (ilustración), etiqueta
+    ["Toyota", "Prado TX", "suv", 7, 4, "Automática", "Gasolina", "Blanco", "#f1f3f5", "Lujosa"],
+    ["Ford", "Escape", "suv", 5, 3, "Automática", "Gasolina", "Rojo", "#c0392b", null],
+    ["Mazda", "3 Touring", "sedan", 5, 2, "Automática", "Gasolina", "Gris", "#6b7280", null],
+    ["Suzuki", "Fronx Híbrida", "suv", 5, 2, "Automática", "Híbrido", "Gris", "#8a8f98", "Híbrida"],
+    ["Suzuki", "Dzire Híbrido", "sedan", 5, 2, "Automática", "Híbrido", "Gris", "#8a8f98", "Sin pico y placa"],
+    ["Kia", "Picanto", "hatch", 5, 1, "Automática", "Gasolina", "Gris", "#9aa3ad", null],
+    ["Chevrolet", "Beat", "hatch", 5, 1, "Mecánica", "Gasolina", "Gris", "#9aa3ad", null],
+    ["Chevrolet", "Spark GT", "hatch", 5, 1, "Mecánica", "Gasolina", "Rojo", "#c0392b", null],
+  ];
+  let i = 0, creados = 0;
+  for (const [marca, modelo, tipo, capacidad, maletas, transmision, combustible, colorNombre, color, destacado] of F) {
+    i++;
+    const [ya] = await sql`select 1 from vehiculos where lower(marca) = lower(${marca}) and lower(modelo) = lower(${modelo}) and placa not in ${sql(PLACAS_EJEMPLO)}`;
+    if (ya) continue;
+    const placa = `POR-${String(i).padStart(3, "0")}`;
+    await sql`insert into vehiculos (marca, modelo, anio, placa, tipo, capacidad, maletas, transmision, combustible, color, color_nombre, precio_dia, deposito, estado, destacado, modalidad, notas)
+      values (${marca}, ${modelo}, ${new Date().getFullYear()}, ${placa}, ${tipo}, ${capacidad}, ${maletas}, ${transmision}, ${combustible}, ${color}, ${colorNombre}, 0, 0, 'inactivo', ${destacado}, 'alquiler', ${pendiente})
+      on conflict (placa) do nothing`;
+    creados++;
+  }
+  const ej = await sql`update vehiculos set estado = 'inactivo', notas = 'Carro de ejemplo del sistema (no es de la flota real).' where placa in ${sql(PLACAS_EJEMPLO)} and estado <> 'inactivo' returning placa`;
+  await sql`insert into configuracion (clave, valor) values ('flota_instagram', ${sql.json({ fecha: new Date().toISOString(), creados, ejemplosInactivos: ej.length })})`;
+  await sql`insert into auditoria (actor, accion) values ('Sistema', ${`Cargó ${creados} vehículo(s) de Instagram (inactivos hasta completar placa y tarifa) e inactivó ${ej.length} carro(s) de ejemplo`})`;
+  await sql`insert into notificaciones (texto) values (${`Se cargaron ${creados} carros reales del Instagram. Para que salgan en la página, ábrelos en Vehículos y completa placa, año, tarifa y estado «Disponible».`})`;
+  console.log(`Flota de Instagram: ${creados} vehículo(s) creados (inactivos) · ${ej.length} carro(s) de ejemplo inactivados.`);
 }
 
 async function seed() {
@@ -117,7 +165,7 @@ async function seed() {
     const v = veh[r[1]];
     const dias = Math.max(1, Math.ceil((new Date(r[3]) - new Date(r[2])) / 86400000));
     const [row] = await sql`insert into reservas (cliente_id, vehiculo_id, inicio, fin, lugar, estado, expira_en, origen, precio_dia, dias, total, deposito, notas, creado_en, nueva)
-      values (${cli[r[0]]}, ${v.id}, ${r[2]}, ${r[3]}, 'Oficina principal (El Poblado)', ${r[4]}, ${r[4] === "pendiente" ? expiraPorCliente[r[0]] : null}, ${r[5]},
+      values (${cli[r[0]]}, ${v.id}, ${r[2]}, ${r[3]}, ${LUGARES_CALI[0]}, ${r[4]}, ${r[4] === "pendiente" ? expiraPorCliente[r[0]] : null}, ${r[5]},
         ${v.precio_dia}, ${dias}, ${dias * v.precio_dia}, ${v.deposito}, ${r[7]}, ${r[6]}, false) returning id, codigo`;
     await sql`insert into reserva_historial (reserva_id, texto, actor, fecha) values (${row.id}, ${"Solicitud creada (" + ({ web: "Web", whatsapp: "WhatsApp", manual: "Manual" })[r[5]] + ")"}, ${r[5] === "manual" ? "Administrador" : r[5] === "whatsapp" ? "Asistente IA" : "Cliente (web)"}, ${r[6]})`;
     res[r[0] + r[1]] = row;
@@ -132,7 +180,7 @@ async function seed() {
   const fd = (iso) => new Date(iso).toLocaleDateString("es-CO", { day: "numeric", month: "short", timeZone: "America/Bogota" });
   await conv("carlos", "Carlos Ramírez", "+57 304 555 0163", "ia", "carlosMRS-551", [
     ["cliente", "Hola, buenas. Necesito una camioneta para la otra semana", -6.4],
-    ["ia", "¡Hola Carlos! 👋 Soy el asistente de Autos del Valle. ¿Qué días la necesitas y dónde la recogerías?", -6.4],
+    ["ia", "¡Hola Carlos! 👋 Soy el asistente virtual. ¿Qué días la necesitas y dónde la recogerías?", -6.4],
     ["cliente", `Del ${fd(at(3, 7))} al ${fd(at(6, 19))}, en la oficina. Es para ir a Urabá por trabajo`, -6.3],
     ["ia", "Para carretera te recomiendo la Toyota Hilux 4x4 (diésel): $350.000/día. Por 4 días serían $1.400.000 + depósito reembolsable de $1.600.000. ¿Te la aparto?", -6.3],
     ["cliente", "Sí, de una", -6.2],

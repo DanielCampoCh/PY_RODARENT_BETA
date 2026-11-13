@@ -69,3 +69,50 @@ export async function enviarTexto(para: string, texto: string) {
     throw new ErrorWhatsApp(msg, codigo);
   }
 }
+
+/* ---------- Mensajes con botones y plantillas (servicios para conductores y alertas) ---------- */
+type Boton = { id: string; titulo: string };
+
+async function enviarWa(cuerpo: Record<string, unknown>) {
+  const c = waConfig();
+  if (!c.token || !c.phoneId) throw new ErrorWhatsApp("WhatsApp no está configurado en el servidor.");
+  const res = await fetch(`${c.base}/${c.version}/${c.phoneId}/messages`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${c.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", ...cuerpo }),
+  });
+  if (!res.ok) {
+    const j = (await res.json().catch(() => null)) as { error?: { message?: string; code?: number } } | null;
+    throw new ErrorWhatsApp(`WhatsApp rechazó el mensaje${j?.error?.code ? ` (código ${j.error.code})` : ""}: ${j?.error?.message ?? res.statusText}`, j?.error?.code);
+  }
+}
+
+/** Mensaje con hasta 3 botones de respuesta. Solo llega si la persona le escribió al negocio en las últimas 24 horas. */
+export const enviarBotones = (para: string, texto: string, botones: Boton[]) =>
+  enviarWa({
+    to: para.replace(/\D/g, ""), type: "interactive",
+    interactive: { type: "button", body: { text: formatoWhatsApp(texto).slice(0, 1024) }, action: { buttons: botones.slice(0, 3).map((b) => ({ type: "reply", reply: { id: b.id, title: b.titulo.slice(0, 20) } })) } },
+  });
+
+/** Nombres de las plantillas aprobadas en Meta (se pueden cambiar con variables de entorno). */
+export const plantillas = () => ({
+  servicio: process.env.WHATSAPP_PLANTILLA_SERVICIO?.trim() || "servicio_conductor",
+  alerta: process.env.WHATSAPP_PLANTILLA_ALERTA?.trim() || "alerta_flota",
+  idioma: process.env.WHATSAPP_PLANTILLA_IDIOMA?.trim() || "es",
+});
+
+// Meta no acepta saltos de línea, tabulaciones ni más de 4 espacios seguidos dentro de un parámetro.
+const param = (t: string) => ({ type: "text", text: (t || "—").replace(/[\n\t]+/g, " · ").replace(/ {4,}/g, " ").slice(0, 900) });
+
+/** Plantilla aprobada (sirve aunque la persona no haya escrito en 24 h). payloads: uno por cada botón de respuesta rápida. */
+export const enviarPlantilla = (para: string, nombre: string, parametros: string[], payloads: string[] = []) =>
+  enviarWa({
+    to: para.replace(/\D/g, ""), type: "template",
+    template: {
+      name: nombre, language: { code: plantillas().idioma },
+      components: [
+        { type: "body", parameters: parametros.map(param) },
+        ...payloads.map((p, i) => ({ type: "button", sub_type: "quick_reply", index: String(i), parameters: [{ type: "payload", payload: p }] })),
+      ],
+    },
+  });

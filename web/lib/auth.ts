@@ -1,4 +1,4 @@
-import { createHmac, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import { db } from "./db";
 
@@ -18,6 +18,12 @@ export function verificarClave(pw: string, stored: string) {
   if (alg !== "scrypt" || !salt || !hash) return false;
   const a = scryptSync(pw, salt, 64), b = Buffer.from(hash, "hex");
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Mismo formato que usa scripts/setup-db.mjs. */
+export function hashClave(pw: string) {
+  const salt = randomBytes(16).toString("hex");
+  return `scrypt$${salt}$${scryptSync(pw, salt, 64).toString("hex")}`;
 }
 
 const firmar = (data: string) => createHmac("sha256", secret()).update(data).digest("base64url");

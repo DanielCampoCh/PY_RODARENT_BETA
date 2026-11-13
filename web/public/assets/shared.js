@@ -58,9 +58,13 @@
     out: ic('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>'),
     bot: ic('<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 14h.01M15 14h.01"/>'),
     link: ic('<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>'),
+    camara: ic('<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".8" fill="currentColor"/>'),
     star: ic('<path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/>'),
     wa: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.1-1.8-.9-2-1s-.5-.1-.7.1-.8 1-1 1.2-.4.2-.7.1a8.2 8.2 0 0 1-4-3.5c-.3-.5.3-.5.9-1.6.1-.2 0-.4 0-.5l-.9-2.2c-.2-.6-.5-.5-.7-.5h-.6a1.2 1.2 0 0 0-.8.4 3.5 3.5 0 0 0-1.1 2.6 6 6 0 0 0 1.3 3.2 13.8 13.8 0 0 0 5.3 4.7c2 .8 2.8.9 3.8.7a3.2 3.2 0 0 0 2.1-1.5 2.6 2.6 0 0 0 .2-1.5c-.1-.1-.3-.2-.6-.3zM12 21.8a9.8 9.8 0 0 1-5-1.4l-.4-.2-3.7 1 1-3.6-.2-.4A9.8 9.8 0 1 1 12 21.8zm0-21.6A11.8 11.8 0 0 0 1.9 18L.2 24l6.2-1.6A11.8 11.8 0 1 0 12 .2z"/></svg>`,
   };
+
+  /* Marca del negocio: silueta de carro en trazo (se pinta con el color del texto: dorado sobre negro). */
+  RR.marca = `<svg viewBox="0 0 40 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 15.5c3.6-.6 6.1-1.7 8.5-3.9C14.7 8.7 18.1 7 23.4 7c4.5 0 7.7 1.8 10.1 4.5 1.7.5 3.2 1.2 4.1 2.4"/><path d="M11.6 12h22.2"/><path d="M5 18.5h30"/></svg>`;
 
   /* ---------- Ilustración de vehículo (SVG original, sin fotos con derechos) ---------- */
   const BODIES = {
@@ -129,8 +133,7 @@
     { key: "contacto", label: "Contacto verificable" },
     { key: "deposito", label: "Depósito / garantía" },
   ];
-  // El requisito de antecedentes solo cuenta si está activado en Ajustes.
-  RR.reqItems = () => [...RR.REQ_ITEMS, ...(RR.store.state?.settings?.antecedentesActiva ? [{ key: "antecedentes", label: "Antecedentes" }] : [])];
+  RR.reqItems = () => RR.REQ_ITEMS;
 
   /* ---------- Estado y API ---------- */
   // El estado viene del servidor (base de datos). Aquí solo se guarda en memoria para pintar la interfaz.
@@ -200,6 +203,32 @@
       <div class="modal-foot"><button class="btn" data-close>Cancelar</button><button class="btn ${danger ? "btn-danger" : "btn-primary"}" data-yes ${danger ? 'style="border-color:var(--danger)"' : ""}>${RR.esc(okLabel)}</button></div>`);
     m.el.querySelector(".modal").style.maxWidth = "440px";
     m.el.querySelector("[data-yes]").addEventListener("click", () => { m.close(); onYes(); });
+  };
+
+  /* Visor de fotos a pantalla completa (flechas del teclado, Esc para cerrar). */
+  RR.verFotos = function (fotos, titulo, inicio = 0) {
+    if (!fotos || !fotos.length) return;
+    let i = inicio;
+    const ov = document.createElement("div");
+    ov.className = "visor";
+    ov.setAttribute("role", "dialog");
+    ov.setAttribute("aria-modal", "true");
+    const pintar = () => {
+      ov.innerHTML = `<div class="v-top"><div class="grow"><b>${RR.esc(titulo || "")}</b>${fotos.length > 1 ? `<div class="xs" style="opacity:.7">Foto ${i + 1} de ${fotos.length}</div>` : ""}</div><button class="v-x" data-c aria-label="Cerrar">${RR.icon.x}</button></div>
+        <div class="v-stage"><img src="${RR.esc(fotos[i])}" alt="${RR.esc(titulo || "Foto del vehículo")}">${fotos.length > 1 ? `<button class="v-nav v-prev" data-p aria-label="Anterior">${RR.icon.back}</button><button class="v-nav v-next" data-n aria-label="Siguiente">${RR.icon.arrow}</button>` : ""}</div>
+        ${fotos.length > 1 ? `<div class="v-thumbs">${fotos.map((f, k) => `<button class="${k === i ? "on" : ""}" data-k="${k}" aria-label="Foto ${k + 1}"><img src="${RR.esc(f)}" alt=""></button>`).join("")}</div>` : "<div></div>"}`;
+    };
+    const ir = (d) => { i = (i + d + fotos.length) % fotos.length; pintar(); };
+    const cerrar = () => { ov.remove(); document.removeEventListener("keydown", tecla); };
+    const tecla = (e) => { if (e.key === "Escape") cerrar(); if (e.key === "ArrowRight") ir(1); if (e.key === "ArrowLeft") ir(-1); };
+    ov.addEventListener("click", (e) => {
+      const t = e.target.closest("button");
+      if (!t) { if (e.target === ov || e.target.classList.contains("v-stage")) cerrar(); return; }
+      if (t.dataset.c !== undefined) cerrar(); else if (t.dataset.p !== undefined) ir(-1); else if (t.dataset.n !== undefined) ir(1); else if (t.dataset.k) { i = +t.dataset.k; pintar(); }
+    });
+    document.addEventListener("keydown", tecla);
+    pintar();
+    document.body.appendChild(ov);
   };
 
   RR.openModal = function (html, { drawer = false, onClose } = {}) {

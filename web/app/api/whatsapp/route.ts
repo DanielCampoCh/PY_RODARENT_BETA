@@ -2,6 +2,7 @@ import { after, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { atender, type Conv } from "@/lib/agent";
 import { enviarTexto, firmaValida, telDesdeWaId, waConfig } from "@/lib/whatsapp";
+import { accionConductor, esAccionConductor } from "@/lib/servicios";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -16,7 +17,7 @@ export async function GET(req: Request) {
   return new NextResponse("Token de verificación inválido", { status: 403 });
 }
 
-type WaMensaje = { id: string; from: string; type: string; text?: { body?: string }; button?: { text?: string }; interactive?: { button_reply?: { title?: string }; list_reply?: { title?: string } } };
+type WaMensaje = { id: string; from: string; type: string; text?: { body?: string }; button?: { text?: string; payload?: string }; interactive?: { button_reply?: { id?: string; title?: string }; list_reply?: { title?: string } } };
 type WaCambio = { value?: { messages?: WaMensaje[]; contacts?: { wa_id: string; profile?: { name?: string } }[] } };
 
 /** Mensajes entrantes. Responde 200 de inmediato y procesa después (Meta reintenta si tardamos). */
@@ -60,6 +61,13 @@ async function procesar(m: WaMensaje, nombrePerfil?: string) {
 
   const telefono = telDesdeWaId(m.from);
   const texto = m.text?.body ?? m.button?.text ?? m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title;
+
+  // Botón de un conductor (Tomar servicio, Terminado o Soltar): no pasa por el asistente.
+  const payload = m.button?.payload ?? m.interactive?.button_reply?.id;
+  if (esAccionConductor(payload)) {
+    try { await accionConductor(telefono, payload!); } catch (e) { console.error("[whatsapp] Botón de conductor:", e instanceof Error ? e.message : e); }
+    return;
+  }
 
   let [conv] = await sql`select id, cliente_id, nombre, telefono, canal, estado, historial_api from conversaciones
     where canal = 'whatsapp' and telefono = ${telefono} and estado <> 'cerrada' limit 1`;

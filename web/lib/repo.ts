@@ -6,12 +6,17 @@ type Row = Record<string, any>;
 export type Ajustes = {
   prereservaHoras: number; edadMinima: number; licenciaVigente: boolean; categorias: string[]; depositoObligatorio: boolean;
   experienciaMin: number; experienciaActiva: boolean; docAdicional: boolean; retencionDias: number; recordatorioHoras: number;
-  lugares: string[]; horario: string; antecedentesActiva?: boolean;
+  lugares: string[]; horario: string;
+  /** Pico y placa: último dígito de la placa restringido por día (1 = lunes … 5 = viernes). */
+  picoPlaca?: Record<string, number[]>;
+  /** Celulares que reciben por WhatsApp las alertas de la flota. */
+  alertasWhatsapp?: string[];
 };
 
 export const negocio = () => ({
-  nombre: process.env.NEGOCIO_NOMBRE || "Autos del Valle",
-  ciudad: process.env.NEGOCIO_CIUDAD || "Medellín",
+  nombre: process.env.NEGOCIO_NOMBRE || "Alquiler de Vehículos BP",
+  lema: process.env.NEGOCIO_LEMA || "Todas las gamas",
+  ciudad: process.env.NEGOCIO_CIUDAD || "Cali",
   whatsapp: process.env.NEGOCIO_WHATSAPP || "",
 });
 
@@ -22,14 +27,27 @@ export async function ajustes(): Promise<Ajustes> {
 
 /** Requisitos que deben estar verificados para aprobar una reserva. */
 export const REQUISITOS_BASE = ["identidad", "licencia", "edad", "contacto", "deposito"] as const;
-export const requisitosRequeridos = (a: Ajustes): string[] => [...REQUISITOS_BASE, ...(a.antecedentesActiva ? ["antecedentes"] : [])];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export const requisitosRequeridos = (_a?: Ajustes): string[] => [...REQUISITOS_BASE];
 
 export const expirar = () => db()`select expirar_prereservas()`;
 
 /* ---------- Mapeo a la forma que usa la interfaz ---------- */
-export const mapVehiculo = (v: Row) => ({
+const dia = (d: any) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+/** Vehículo para el catálogo público (sin datos internos). */
+export const mapVehiculo = (v: Row, fotos?: unknown) => ({
+  fotos: Array.isArray(fotos) ? (fotos as string[]) : [],
   id: v.id, marca: v.marca, modelo: v.modelo, anio: v.anio, placa: v.placa, tipo: v.tipo, capacidad: v.capacidad, maletas: v.maletas,
   transmision: v.transmision, combustible: v.combustible, color: v.color, precio: v.precio_dia, deposito: v.deposito, estado: v.estado, destacado: v.destacado,
+  modalidad: v.modalidad ?? "alquiler", agencia: v.modalidad === "agencia" ? v.agencia || "Agencia aliada" : undefined,
+});
+/** Vehículo completo para el panel (documentos, GPS, responsable y kilometraje). */
+export const mapVehiculoPanel = (v: Row, fotos: string[] = [], propias: { id: string; url: string; galeria: boolean }[] = []) => ({
+  ...mapVehiculo(v, fotos),
+  fotosPropias: propias,
+  codigo: v.codigo, colorNombre: v.color_nombre, responsable: v.responsable, responsableTel: v.responsable_tel, gps: v.gps, gpsRecarga: dia(v.gps_recarga),
+  soat: dia(v.soat_vence), tecno: dia(v.tecno_vence), seguro: dia(v.seguro_vence), aseguradora: v.aseguradora, extintor: dia(v.extintor_vence), impuesto: dia(v.impuesto_vence),
+  km: v.km_actual, kmAceite: v.km_aceite, agencia: v.agencia, comision: v.comision_pct == null ? null : Number(v.comision_pct), notas: v.notas,
 });
 
 const edad = (nac: string | Date | null) => {
@@ -44,7 +62,8 @@ export const mapCliente = (c: Row, enmascarar: boolean) => ({
   id: c.id, nombre: c.nombre,
   doc: enmascarar && c.documento ? c.documento.replace(/\d(?=\d{4})/g, "•") : c.documento,
   tel: c.telefono, email: c.email, edad: edad(c.fecha_nacimiento), licencia: c.licencia_categoria, licVence: fechaCorta(c.licencia_vence),
-  origen: c.origen, creado: iso(c.creado_en), verif: c.verificacion, consent: { datos: iso(c.consentimiento_datos), marketing: c.consentimiento_marketing, antecedentes: iso(c.consentimiento_antecedentes) },
+  origen: c.origen, creado: iso(c.creado_en), verif: c.verificacion, consent: { datos: iso(c.consentimiento_datos), marketing: c.consentimiento_marketing },
+  fechaNac: fechaCorta(c.fecha_nacimiento),
 });
 
 export const mapReserva = (r: Row, historial: Row[] = []) => ({
@@ -64,7 +83,7 @@ export async function ocupados() {
 export async function vehiculosDisponibles(inicio: string, fin: string, pasajeros = 1) {
   await expirar();
   return db()`select v.* from vehiculos v
-    where v.estado = 'disponible' and v.capacidad >= ${pasajeros}
+    where v.estado = 'disponible' and v.modalidad in ('alquiler', 'agencia') and v.precio_dia > 0 and v.capacidad >= ${pasajeros}
       and not exists (select 1 from reservas r where r.vehiculo_id = v.id
         and r.estado in ('pendiente','aprobada','en_curso')
         and tstzrange(r.inicio, r.fin, '[)') && tstzrange(${inicio}::timestamptz, ${fin}::timestamptz, '[)'))
@@ -180,6 +199,8 @@ export async function crearReserva(p: {
   const [v] = await db()`select * from vehiculos where id = ${p.vehiculoId}`;
   if (!v) return { ok: false, error: "Vehículo no encontrado." };
   if (v.estado !== "disponible") return { ok: false, error: `El ${v.marca} ${v.modelo} no está disponible (${v.estado}).` };
+  if (v.modalidad === "uber") return { ok: false, error: `El ${v.marca} ${v.modelo} trabaja en plataforma (Uber) y no se alquila.` };
+  if (!(v.precio_dia > 0)) return { ok: false, error: `El ${v.marca} ${v.modelo} no tiene tarifa por día configurada.` };
   if (new Date(p.fin) <= new Date(p.inicio)) return { ok: false, error: "La devolución debe ser posterior a la recogida." };
   if (new Date(p.inicio).getTime() < Date.now() - 3600000) return { ok: false, error: "La fecha de recogida ya pasó." };
   const { prereservaHoras } = await ajustes();
