@@ -322,19 +322,36 @@ export async function atender(conv: Conv, texto: string): Promise<Resultado> {
   historial = [...historial, ...nuevos];
 
   for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta++) {
-    const params = {
-      model,
-      max_tokens: 4000,
-      system: [{ type: "text" as const, text: system, cache_control: { type: "ephemeral" as const } }],
-      tools: TOOLS,
-      messages: historial,
-      output_config: { effort: "low" as const },
+    // El razonamiento ("thinking") que el modelo guarda en el historial queda ligado a las instrucciones, las herramientas
+    // y los mensajes anteriores. Si algo de eso cambia entre un mensaje y otro (al publicar una versión nueva o al editar
+    // los Ajustes, que van en las instrucciones), la API rechaza el historial. Con "drop_block" descarta ese razonamiento
+    // viejo y sigue: la conversación visible se conserva completa.
+    const pedir = (messages: Msg[]) => {
+      const params = {
+        model,
+        max_tokens: 4000,
+        system: [{ type: "text" as const, text: system, cache_control: { type: "ephemeral" as const } }],
+        tools: TOOLS,
+        messages,
+        output_config: { effort: "low" as const },
+        thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } },
+      };
+      const betas = ["thinking-binding-controls-2026-08-01", ...(model.includes("haiku") ? [] : ["server-side-fallback-2026-07-01"])];
+      return client.beta.messages.create({ ...params, betas, ...(model.includes("haiku") ? {} : { fallbacks: "default" }) } as never) as Promise<Anthropic.Beta.BetaMessage>;
     };
     let resp: Anthropic.Beta.BetaMessage;
     try {
-      resp = model.includes("haiku")
-        ? await client.beta.messages.create(params)
-        : await client.beta.messages.create({ ...params, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" } as never);
+      try {
+        resp = await pedir(historial);
+      } catch (e) {
+        // Respaldo: si aun así la API rechaza un bloque de razonamiento, se reintenta una vez sin esos bloques.
+        if (!(e instanceof Anthropic.APIError && e.status === 400 && /thinking/i.test(e.message))) throw e;
+        console.warn("[ia] Historial con razonamiento inválido: se reintenta sin bloques de thinking");
+        const sinThinking = historial
+          .map((m) => (Array.isArray(m.content) ? { ...m, content: (m.content as { type: string }[]).filter((b) => b.type !== "thinking" && b.type !== "redacted_thinking") } : m) as Msg)
+          .filter((m) => !Array.isArray(m.content) || m.content.length > 0);
+        resp = await pedir(sinThinking);
+      }
     } catch (e) {
       console.error("Error de la API de IA", e instanceof Anthropic.APIError ? `${e.status} ${e.message}` : e);
       // Un mensaje de sistema no puede quedar seguido de un mensaje del cliente: si no hubo respuesta, no se guarda.
