@@ -33,7 +33,7 @@
   }
 
   /* ---------- Búsqueda ---------- */
-  const search = { loc: "", start: null, end: null, type: "all" };
+  const search = { loc: "", ubic: null, start: null, end: null, type: "all" };
   const t0 = RR.addDays(RR.startOfDay(new Date()), 1); t0.setHours(9);
   const t1 = RR.addDays(t0, 3);
   search.start = t0.toISOString(); search.end = t1.toISOString();
@@ -46,7 +46,7 @@
     const a = new Date($("#sStart").value), b = new Date($("#sEnd").value);
     if (!(b > a)) { $("#sEnd").classList.add("invalid"); RR.toast("La devolución debe ser posterior a la recogida", true); return; }
     $("#sEnd").classList.remove("invalid");
-    Object.assign(search, { loc: $("#sLoc").value, start: a.toISOString(), end: b.toISOString() });
+    Object.assign(search, { start: a.toISOString(), end: b.toISOString() });
     try { await cargarCatalogo(); } catch (err) { RR.toast(err.message, true); }
     renderGrid();
     document.getElementById("vehiculos").scrollIntoView({ behavior: "smooth" });
@@ -113,8 +113,8 @@
 
   /* ---------- Requisitos, condiciones y FAQ ---------- */
   function renderInfo() {
-    $("#sLoc").innerHTML = RR.BUSINESS.locations.map((l) => `<option>${RR.esc(l)}</option>`).join("");
     search.loc = RR.BUSINESS.locations[0];
+    conectarLugar($("#sLoc"), $("#sLocNota"), search);
     $("#reqList").innerHTML = [
       ["user", "Edad mínima", `${st.edadMinima} años cumplidos.`],
       ["doc", "Documento de identidad", "Cédula de ciudadanía o pasaporte vigente (extranjeros)."],
@@ -152,10 +152,139 @@
       <div class="modal-foot"><button class="btn btn-primary" data-close>Entendido</button></div>`);
   }
 
+  /* ---------- Ubicación: mapa con pin arrastrable + dirección editable a mano ---------- */
+  const CALI = [3.4516, -76.532];
+  const lugarDomicilio = () => RR.BUSINESS.locations.find((l) => /domicilio/i.test(l)) || null;
+  let leaflet = null;
+  function cargarLeaflet() {
+    if (window.L) return Promise.resolve(window.L);
+    if (leaflet) return leaflet;
+    leaflet = new Promise((ok, mal) => {
+      const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"; document.head.appendChild(css);
+      const s = document.createElement("script"); s.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+      s.onload = () => ok(window.L); s.onerror = () => { leaflet = null; mal(new Error("No se pudo cargar el mapa")); };
+      document.head.appendChild(s);
+    });
+    return leaflet;
+  }
+  const corta = (d) => String(d || "").split(",").slice(0, 2).join(",").trim();
+
+  /** Abre el mapa. Devuelve {direccion, indicaciones, lat, lng} o null si cancela. */
+  function elegirUbicacion({ titulo = "Tu ubicación", boton = "Usar esta ubicación", previa = null } = {}) {
+    return new Promise((resolver) => {
+      let hecho = false;
+      const fin = (v) => { if (hecho) return; hecho = true; resolver(v); };
+      const m = RR.openModal(`<div class="modal-head"><div class="grow"><h2>${RR.esc(titulo)}</h2><p class="small muted" style="margin-top:4px">Si el punto no quedó bien, arrastra el pin o toca el mapa. También puedes escribir la dirección.</p></div><button class="btn btn-ghost btn-icon" data-close aria-label="Cerrar">${I.x}</button></div>
+        <div class="modal-body stack">
+          <button type="button" class="btn" id="uGps">${I.pin}Usar mi ubicación actual</button>
+          <div class="ubic-mapa" id="uMapa"><span class="muted small">Cargando mapa…</span></div>
+          <div class="field"><label for="uDir">Dirección</label>
+            <div class="row" style="gap:8px"><input class="input grow" id="uDir" maxlength="300" placeholder="Ej.: Calle 5 # 38-20, San Fernando" value="${RR.esc((previa && previa.direccion) || "")}"><button type="button" class="btn" id="uBuscar">${I.search}Buscar</button></div>
+            <span class="help" id="uEstado">Puedes corregirla a mano: el conductor usará lo que quede escrito aquí.</span></div>
+          <div class="field"><label for="uInd">Indicaciones (opcional)</label><input class="input" id="uInd" maxlength="200" placeholder="Ej.: conjunto Los Pinos, torre 3, apto 502" value="${RR.esc((previa && previa.indicaciones) || "")}"></div>
+        </div>
+        <div class="modal-foot"><button class="btn" data-close>Cancelar</button><button class="btn btn-primary" id="uOk">${RR.esc(boton)}</button></div>`, { onClose: () => fin(null) });
+      const $m = (s) => m.el.querySelector(s);
+      m.el.querySelector(".modal").style.maxWidth = "560px";
+      const estado = (t, err) => { const e = $m("#uEstado"); e.textContent = t; e.style.color = err ? "var(--danger)" : ""; };
+      let punto = previa && previa.lat != null ? { lat: previa.lat, lng: previa.lng } : null;
+      let mapa = null, pin = null, editadaAMano = !!(previa && previa.direccion), pedido = 0;
+
+      async function leerDireccion() {
+        if (!punto) return;
+        const n = ++pedido;
+        estado("Buscando la dirección…");
+        try {
+          const r = await RR.api(`/api/ubicacion?lat=${punto.lat.toFixed(6)}&lng=${punto.lng.toFixed(6)}`);
+          if (n !== pedido) return;
+          if (!editadaAMano || !$m("#uDir").value.trim()) $m("#uDir").value = r.direccion;
+          estado("Revisa la dirección: si no es exacta, corrígela a mano.");
+        } catch (e) { if (n === pedido) estado(e.message + " Escríbela a mano.", true); }
+      }
+      function ponerPunto(lat, lng, { leer = true, centrar = true } = {}) {
+        punto = { lat, lng };
+        if (mapa) { pin.setLatLng([lat, lng]); pin.setOpacity(1); if (centrar) mapa.setView([lat, lng], Math.max(mapa.getZoom(), 16)); }
+        if (leer) { editadaAMano = false; leerDireccion(); }
+      }
+      cargarLeaflet().then((L) => {
+        if (hecho) return;
+        const box = $m("#uMapa"); box.innerHTML = "";
+        mapa = L.map(box, { zoomControl: true }).setView(punto ? [punto.lat, punto.lng] : CALI, punto ? 16 : 12);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(mapa);
+        const icono = L.divIcon({ className: "ubic-pin", html: I.pin, iconSize: [36, 36], iconAnchor: [18, 34] });
+        pin = L.marker(punto ? [punto.lat, punto.lng] : CALI, { draggable: true, icon: icono, opacity: punto ? 1 : 0.55 }).addTo(mapa);
+        pin.on("dragend", () => { const p = pin.getLatLng(); ponerPunto(p.lat, p.lng, { centrar: false }); });
+        mapa.on("click", (e) => ponerPunto(e.latlng.lat, e.latlng.lng, { centrar: false }));
+        setTimeout(() => mapa.invalidateSize(), 60);
+      }).catch((e) => { $m("#uMapa").innerHTML = `<span class="muted small">${RR.esc(e.message)}. Escribe la dirección abajo.</span>`; });
+
+      $m("#uGps").addEventListener("click", () => {
+        if (!navigator.geolocation) { estado("Tu navegador no comparte la ubicación. Mueve el pin o escribe la dirección.", true); return; }
+        const b = $m("#uGps"); b.disabled = true; estado("Pidiendo tu ubicación al navegador…");
+        navigator.geolocation.getCurrentPosition((p) => {
+          b.disabled = false;
+          ponerPunto(p.coords.latitude, p.coords.longitude);
+          if (p.coords.accuracy > 150) setTimeout(() => estado(`Ubicación aproximada (±${Math.round(p.coords.accuracy)} m): revisa el pin y la dirección.`), 1500);
+        }, (err) => {
+          b.disabled = false;
+          estado(err.code === 1 ? "No diste permiso para ver tu ubicación. Mueve el pin en el mapa o escribe la dirección." : "No pudimos obtener tu ubicación. Mueve el pin o escribe la dirección.", true);
+        }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
+      });
+      $m("#uDir").addEventListener("input", () => (editadaAMano = true));
+      const buscar = async () => {
+        const q = $m("#uDir").value.trim();
+        if (q.length < 3) { estado("Escribe la dirección para buscarla.", true); return; }
+        estado("Buscando en el mapa…");
+        try {
+          const r = await RR.api(`/api/ubicacion?q=${encodeURIComponent(q)}`);
+          ponerPunto(r.lat, r.lng, { leer: false });
+          estado("Ubicamos el punto. Si no es exacto, arrastra el pin (lo que escribiste se mantiene).");
+        } catch (e) { estado(e.message, true); }
+      };
+      $m("#uBuscar").addEventListener("click", buscar);
+      $m("#uDir").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); buscar(); } });
+      $m("#uOk").addEventListener("click", () => {
+        const direccion = $m("#uDir").value.trim();
+        if (direccion.length < 3) { estado("Escribe la dirección o elige un punto en el mapa.", true); $m("#uDir").focus(); return; }
+        fin({ direccion, indicaciones: $m("#uInd").value.trim(), lat: punto ? +punto.lat.toFixed(6) : null, lng: punto ? +punto.lng.toFixed(6) : null });
+        m.close();
+      });
+    });
+  }
+  /** Mismo formato que lib/geo.ts textoUbicacion: así el asistente lo lee igual en la web y en WhatsApp. */
+  const textoUbicacion = (u) => [`📍 Mi ubicación: ${u.direccion}`, u.indicaciones ? `Indicaciones: ${u.indicaciones}` : "", u.lat != null ? `Mapa: https://maps.google.com/?q=${u.lat.toFixed(6)},${u.lng.toFixed(6)}` : ""].filter(Boolean).join("\n");
+  const entregaDe = (u) => ({ direccion: [u.direccion, u.indicaciones].filter(Boolean).join(" · ").slice(0, 300), lat: u.lat, lng: u.lng });
+
+  /** Opciones del select de lugar, con «📍 Usar mi ubicación» si existe un lugar de domicilio. */
+  function opcionesLugar(sel, ubic) {
+    const dom = lugarDomicilio();
+    return RR.BUSINESS.locations.map((l) => `<option ${l === sel && !ubic ? "selected" : ""}>${RR.esc(l)}</option>`).join("")
+      + (dom ? `<option value="__ubic" ${ubic ? "selected" : ""}>📍 ${ubic ? RR.esc(corta(ubic.direccion)) : "Usar mi ubicación (domicilio)"}</option>` : "");
+  }
+  /** Conecta un select de lugar con el mapa. `est` guarda loc (lugar) y ubic (dirección elegida). */
+  function conectarLugar(selEl, notaEl, est) {
+    const pintar = () => {
+      selEl.innerHTML = opcionesLugar(est.loc, est.ubic);
+      notaEl.classList.toggle("hidden", !est.ubic);
+      notaEl.innerHTML = est.ubic ? `${I.pin}<span>Entrega en: <b>${RR.esc(est.ubic.direccion)}</b>${est.ubic.indicaciones ? ` · ${RR.esc(est.ubic.indicaciones)}` : ""} <button type="button" class="link-btn" data-cambiar>Cambiar</button></span>` : "";
+      const c = notaEl.querySelector("[data-cambiar]"); if (c) c.addEventListener("click", abrir);
+    };
+    async function abrir() {
+      const u = await elegirUbicacion({ titulo: "¿Dónde te entregamos el carro?", boton: "Entregar aquí", previa: est.ubic });
+      if (u) { est.ubic = u; est.loc = lugarDomicilio(); }
+      pintar();
+    }
+    selEl.addEventListener("change", () => {
+      if (selEl.value === "__ubic") { abrir(); return; }
+      est.loc = selEl.value; est.ubic = null; pintar();
+    });
+    pintar();
+  }
+
   /* ---------- Modal de reserva ---------- */
   function openBooking(vid) {
     const v = RR.get.vehicle(vid);
-    const b = { vid, start: search.start, end: search.end, loc: search.loc, step: 1, data: {}, docs: {} };
+    const b = { vid, start: search.start, end: search.end, loc: search.loc, ubic: search.ubic, step: 1, data: {}, docs: {} };
     const m = RR.openModal(`<div id="bk"></div>`);
     const root = $("#bk", m.el);
 
@@ -178,7 +307,7 @@
           <div class="modal-body stack">
             <div class="sum"><div class="art">${v.fotos.length ? `<img src="${RR.esc(v.fotos[0])}" alt="" style="width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:8px;display:block">` : RR.carSVG(v.tipo, v.color)}</div><div><div class="bold">${RR.esc(v.marca)} ${RR.esc(v.modelo)} · ${v.anio}</div>${specs(v)}</div></div>
             <div class="form-grid">
-              <div class="field full"><label for="bLoc">Lugar de recogida</label><select class="select" id="bLoc">${RR.BUSINESS.locations.map((l) => `<option ${l === b.loc ? "selected" : ""}>${RR.esc(l)}</option>`).join("")}</select></div>
+              <div class="field full"><label for="bLoc">Lugar de recogida</label><select class="select" id="bLoc"></select><div class="loc-nota hidden" id="bLocNota"></div></div>
               <div class="field"><label for="bStart">Recogida</label><input class="input" type="datetime-local" id="bStart" value="${RR.toLocalInput(b.start)}"></div>
               <div class="field"><label for="bEnd">Devolución</label><input class="input" type="datetime-local" id="bEnd" value="${RR.toLocalInput(b.end)}"></div>
             </div>
@@ -195,7 +324,7 @@
           $("#bAvail", root).innerHTML = msg; $("#bPrice", root).innerHTML = priceBlock(); $("#bNext", root).disabled = !ok;
         };
         $("#bStart", root).addEventListener("change", check); $("#bEnd", root).addEventListener("change", check);
-        $("#bLoc", root).addEventListener("change", (e) => (b.loc = e.target.value));
+        conectarLugar($("#bLoc", root), $("#bLocNota", root), b);
         check();
         $("#bNext", root).addEventListener("click", () => { b.step = 2; render(); });
       } else if (b.step === 2) {
@@ -272,7 +401,7 @@
             const r = await RR.api("/api/reservas", {
               habitual: hab, vehiculo: v.id, inicio: b.start, fin: b.end, lugar: b.loc, documento: d2.docNum, telefono: d2.tel,
               nombre: opt("#fName", d2.nombre), email: opt("#fEmail", d2.email), nacimiento: opt("#fBirth", d2.birth), licencia: opt("#fLic", d2.lic), licenciaVence: opt("#fLicV", d2.licV),
-              notas: d2.notas || "", consentimiento: true, marketing: !!d2.mkt,
+              notas: d2.notas || "", consentimiento: true, marketing: !!d2.mkt, entrega: b.ubic ? entregaDe(b.ubic) : undefined,
             });
             b.res = r; b.step = 3; render();
             cargarCatalogo().then(renderGrid).catch(() => {});
@@ -291,6 +420,7 @@
             <div class="card card-pad" style="text-align:left;margin-top:20px">
               <div class="row between"><span class="muted small">Vehículo</span><b class="small">${RR.esc(v.marca)} ${RR.esc(v.modelo)}</b></div>
               <div class="row between" style="margin-top:8px"><span class="muted small">Recogida</span><span class="small">${RR.fmtDT(r.inicio)}</span></div>
+              ${b.ubic ? `<div class="row between" style="margin-top:8px;gap:12px"><span class="muted small">Entrega</span><span class="small" style="text-align:right">${RR.esc(b.ubic.direccion)}</span></div>` : ""}
               <div class="row between" style="margin-top:8px"><span class="muted small">Devolución</span><span class="small">${RR.fmtDT(r.fin)}</span></div>
               <div class="row between" style="margin-top:8px"><span class="muted small">Total estimado</span><b class="small">${RR.money(r.total)}</b></div>
               <div class="row between" style="margin-top:8px"><span class="muted small">Estado</span>${RR.badge(RR.RES_STATUS, "pendiente")}</div>
@@ -322,18 +452,167 @@
   $("#fab").addEventListener("click", () => (chat.open ? closeChat() : openChat()));
   $$("[data-open-chat]").forEach((b) => b.addEventListener("click", openChat));
   // "Solicitar un conductor": abre el chat y el asistente toma los datos del viaje y se los envía a los conductores.
-  $$("[data-conductor]").forEach((b) => b.addEventListener("click", async () => { openChat(); await chat.listo; if (!chat.enviando) enviar("Quiero solicitar un servicio con conductor"); }));
+  $$("[data-conductor]").forEach((b) => b.addEventListener("click", async () => { openChat(); await chat.listo; if (!chat.enviando) formConductor(); }));
   setTimeout(() => $("#fabHint") && $("#fabHint").classList.add("hidden"), 9000);
+
+  /* ---------- Chat: menú de opciones (botón ☰ o escribir «/») y formularios rápidos ---------- */
+  const fechaTexto = (iso) => new Date(iso).toLocaleString("es-CO", { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Bogota" });
+  const ubicTexto = (u) => [u.direccion, u.indicaciones].filter(Boolean).join(" · ") + (u.lat != null ? `\nMapa: https://maps.google.com/?q=${u.lat.toFixed(6)},${u.lng.toFixed(6)}` : "");
+  const COMANDOS = [
+    { cmd: "cotizar", ic: "car", titulo: "Cotizar o reservar", desc: "Fechas, personas y lugar en un formulario", fn: () => formCotizar() },
+    { cmd: "conductor", ic: "user", titulo: "Pedir un conductor", desc: "Te llevamos a donde vayas", fn: () => formConductor() },
+    { cmd: "reservas", ic: "list", titulo: "Mis reservas", desc: "Consulta el estado de tus reservas", fn: () => formIdentidad("reservas") },
+    { cmd: "cancelar", ic: "x", titulo: "Cancelar una reserva", desc: "Si ya no la necesitas o te equivocaste", fn: () => formIdentidad("cancelar") },
+    { cmd: "ubicacion", ic: "pin", titulo: "Enviar mi ubicación", desc: "Para la entrega o la recogida", fn: () => enviarUbicacion() },
+    { cmd: "asesor", ic: "chat", titulo: "Hablar con un asesor", desc: "Te atiende una persona", fn: () => enviar("Quiero hablar con un asesor") },
+  ];
+  const norm = (t) => t.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  function comandosQue(filtro) {
+    const f = norm(filtro.replace(/^\//, "").trim());
+    return COMANDOS.filter((c) => !f || c.cmd.startsWith(f) || norm(c.titulo).includes(f));
+  }
+  function pintarMenu(filtro = "") {
+    const box = $("#waMenu"), lista = comandosQue(filtro);
+    box.innerHTML = lista.length
+      ? `<div class="wa-menu-t">Opciones · también puedes escribir <b>/</b></div>` + lista.map((c, i) => `<button type="button" class="wa-op ${i === 0 && filtro ? "sel" : ""}" data-cmd="${c.cmd}"><span class="ic">${I[c.ic]}</span><span class="grow"><b>${c.titulo}</b><small>${c.desc}</small></span><code>/${c.cmd}</code></button>`).join("")
+      : `<div class="wa-menu-t">No hay una opción con «${RR.esc(filtro)}». Borra la barra para escribir normal.</div>`;
+    box.classList.remove("hidden");
+    $$("[data-cmd]", box).forEach((b) => b.addEventListener("click", () => ejecutarComando(b.dataset.cmd)));
+  }
+  const cerrarMenu = () => $("#waMenu") && $("#waMenu").classList.add("hidden");
+  function ejecutarComando(cmd) {
+    const c = COMANDOS.find((x) => x.cmd === cmd);
+    cerrarMenu(); $("#waText").value = "";
+    if (!c || chat.enviando) return;
+    $$(".quick", body()).forEach((q) => q.remove());
+    c.fn();
+  }
+  async function enviarUbicacion() {
+    const u = await elegirUbicacion({ titulo: "Enviar mi ubicación", boton: "Enviar ubicación" });
+    if (u) enviar(textoUbicacion(u));
+  }
+
+  /** Abre un formulario en ventana. armar(root) devuelve el texto a enviar o lanza Error con lo que falta. */
+  function formulario(titulo, sub, html, armar, alAbrir) {
+    const m = RR.openModal(`<div class="modal-head"><div class="grow"><h2>${titulo}</h2><p class="small muted" style="margin-top:4px">${sub}</p></div><button class="btn btn-ghost btn-icon" data-close aria-label="Cerrar">${I.x}</button></div>
+      <form class="modal-body stack" novalidate><div class="form-grid">${html}</div><div data-err></div></form>
+      <div class="modal-foot"><button class="btn" data-close>Cancelar</button><button class="btn btn-primary" data-ok>${I.send}Enviar al asistente</button></div>`);
+    m.el.querySelector(".modal").style.maxWidth = "560px";
+    const root = m.el;
+    // Botones de opción (una sola) y contadores.
+    $$("[data-opciones]", root).forEach((g) => $$("button", g).forEach((b) => b.addEventListener("click", () => { $$("button", g).forEach((x) => x.classList.toggle("active", x === b)); })));
+    $$("[data-contador]", root).forEach((g) => {
+      const n = $("output", g), min = +g.dataset.min || 1, max = +g.dataset.max || 50;
+      $$("button", g).forEach((b) => b.addEventListener("click", () => { n.value = String(Math.min(max, Math.max(min, +n.value + +b.dataset.paso))); }));
+    });
+    alAbrir && alAbrir(root);
+    const enviarForm = () => {
+      try { const t = armar(root); m.close(); enviar(t); }
+      catch (e) { $("[data-err]", root).innerHTML = `<div class="callout err">${I.alert}<span>${RR.esc(e.message)}</span></div>`; }
+    };
+    $("[data-ok]", root).addEventListener("click", enviarForm);
+    $("form", root).addEventListener("submit", (e) => { e.preventDefault(); enviarForm(); });
+  }
+  const opciones = (nombre, lista, activa) => `<div class="opciones" data-opciones="${nombre}">${lista.map((o) => `<button type="button" class="${o === activa ? "active" : ""}">${RR.esc(o)}</button>`).join("")}</div>`;
+  const elegida = (root, nombre) => { const b = $(`[data-opciones="${nombre}"] button.active`, root); return b ? b.textContent : ""; };
+  const contador = (id, valor, min, max) => `<div class="contador" data-contador id="${id}" data-min="${min}" data-max="${max}"><button type="button" data-paso="-1" aria-label="Menos">−</button><output>${valor}</output><button type="button" data-paso="1" aria-label="Más">+</button></div>`;
+  const lineas = (pares) => pares.filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== "").map(([k, v]) => `${k}: ${v}`).join("\n");
+
+  function formCotizar() {
+    const est = { loc: search.loc, ubic: search.ubic };
+    const ini = new Date(search.start), fin = new Date(search.end);
+    formulario("Cotizar un vehículo", "Llena lo que sepas y el asistente te muestra las opciones disponibles.", `
+      <div class="field full"><label>¿Para qué lo necesitas?</label>${opciones("uso", ["Paseo / turismo", "Trabajo", "Viaje fuera de Cali", "Evento", "Otro"], "Paseo / turismo")}</div>
+      <div class="field"><label>¿Cuántas personas?</label>${contador("cPers", 2, 1, 15)}</div>
+      <div class="field"><label>Maletas</label>${contador("cMal", 1, 0, 10)}</div>
+      <div class="field full"><label>Tipo de vehículo</label>${opciones("tipo", ["Cualquiera", "Económico", "Sedán", "SUV", "Camioneta", "Van"], "Cualquiera")}</div>
+      <div class="field"><label for="cIni">Recogida</label><input class="input" type="datetime-local" id="cIni" value="${RR.toLocalInput(ini)}" min="${RR.toLocalInput(new Date())}"></div>
+      <div class="field"><label for="cFin">Devolución</label><input class="input" type="datetime-local" id="cFin" value="${RR.toLocalInput(fin)}"></div>
+      <div class="field full"><label for="cLoc">Lugar de entrega</label><select class="select" id="cLoc"></select><div class="loc-nota hidden" id="cLocNota"></div></div>
+      <div class="field full"><label for="cNotas">Comentarios (opcional)</label><input class="input" id="cNotas" maxlength="300" placeholder="Ej.: necesito silla para bebé, voy a Buga"></div>`,
+      (root) => {
+        const a = $("#cIni", root).value, b = $("#cFin", root).value;
+        if (!a || !b) throw new Error("Elige la fecha y hora de recogida y de devolución.");
+        if (!(new Date(b) > new Date(a))) throw new Error("La devolución debe ser posterior a la recogida.");
+        if (new Date(a) < new Date(Date.now() - 3600000)) throw new Error("La fecha de recogida ya pasó.");
+        return "🚗 Quiero cotizar un vehículo\n" + lineas([
+          ["Para qué", elegida(root, "uso")], ["Personas", $("#cPers output", root).value], ["Maletas", $("#cMal output", root).value],
+          ["Tipo de vehículo", elegida(root, "tipo")], ["Recogida", fechaTexto(a)], ["Devolución", fechaTexto(b)],
+          ["Lugar", est.loc], ["Entrega en", est.ubic ? ubicTexto(est.ubic) : ""], ["Comentarios", $("#cNotas", root).value.trim()],
+        ]);
+      },
+      (root) => conectarLugar($("#cLoc", root), $("#cLocNota", root), est));
+  }
+
+  function formConductor() {
+    const t = new Date(Date.now() + 2 * 3600000); t.setMinutes(0, 0, 0);
+    let origen = null;
+    formulario("Pedir un conductor", "Nuestros conductores reciben tu pedido por WhatsApp y el primero que lo tome te recoge.", `
+      <div class="field full"><label for="kO">¿Dónde te recogemos?</label><div class="row" style="gap:8px"><input class="input grow" id="kO" maxlength="200" placeholder="Dirección o lugar"><button type="button" class="btn" id="kOMapa">${I.pin}Mapa</button></div></div>
+      <div class="field full"><label for="kD">¿A dónde vas?</label><input class="input" id="kD" maxlength="200" placeholder="Ej.: Aeropuerto, Felidia, Jamundí"></div>
+      <div class="field"><label for="kF">Fecha y hora</label><input class="input" type="datetime-local" id="kF" value="${RR.toLocalInput(t)}" min="${RR.toLocalInput(new Date())}"></div>
+      <div class="field"><label>Pasajeros</label>${contador("kP", 1, 1, 15)}</div>
+      <div class="field full"><label>Viaje</label>${opciones("viaje", ["Solo ida", "Ida y vuelta"], "Solo ida")}</div>
+      <div class="field full"><label for="kN">Detalles (opcional)</label><input class="input" id="kN" maxlength="300" placeholder="Equipaje, paradas, mascotas…"></div>`,
+      (root) => {
+        const o = $("#kO", root).value.trim(), d = $("#kD", root).value.trim(), f = $("#kF", root).value;
+        if (o.length < 3) throw new Error("Escribe dónde te recogemos o elígelo en el mapa.");
+        if (d.length < 2) throw new Error("Escribe a dónde vas.");
+        if (!f || new Date(f) < new Date(Date.now() - 15 * 60000)) throw new Error("Elige una fecha y hora que no haya pasado.");
+        const mapa = origen && origen.direccion === o.split(" · ")[0] && origen.lat != null ? `\nMapa: https://maps.google.com/?q=${origen.lat.toFixed(6)},${origen.lng.toFixed(6)}` : "";
+        return "🚕 Quiero un servicio con conductor\n" + lineas([
+          ["Recoger en", o + mapa], ["Destino", d], ["Fecha y hora", fechaTexto(f)], ["Pasajeros", $("#kP output", root).value],
+          ["Viaje", elegida(root, "viaje")], ["Detalles", $("#kN", root).value.trim()],
+        ]);
+      },
+      (root) => $("#kOMapa", root).addEventListener("click", async () => {
+        const u = await elegirUbicacion({ titulo: "¿Dónde te recogemos?", boton: "Recoger aquí", previa: origen });
+        if (u) { origen = u; $("#kO", root).value = [u.direccion, u.indicaciones].filter(Boolean).join(" · "); }
+      }));
+  }
+
+  /** Mis reservas / cancelar: en la web se pide documento y celular para saber de quién son. */
+  function formIdentidad(tipo) {
+    const cancelar = tipo === "cancelar";
+    formulario(cancelar ? "Cancelar una reserva" : "Mis reservas",
+      cancelar ? "Las pre-reservas se cancelan sin costo. Las confirmadas, sin costo hasta 48 horas antes de la recogida." : "Usamos tu documento y celular para proteger tus datos.", `
+      ${cancelar ? `<div class="field full"><label for="iCod">Código de la reserva (si lo tienes)</label><input class="input" id="iCod" maxlength="20" placeholder="Ej.: RR-1234" style="text-transform:uppercase"></div>` : ""}
+      <div class="field"><label for="iDoc">Número de documento</label><input class="input" id="iDoc" inputmode="numeric" maxlength="20" placeholder="Cédula o pasaporte"></div>
+      <div class="field"><label for="iTel">Celular</label><input class="input" id="iTel" inputmode="tel" maxlength="16" placeholder="300 123 4567"></div>
+      ${cancelar ? `<div class="field full"><label>¿Por qué la cancelas?</label>${opciones("motivo", ["Ya no lo necesito", "Me equivoqué de vehículo", "Me equivoqué de fechas", "Otro motivo"], "Ya no lo necesito")}</div>` : ""}`,
+      (root) => {
+        const doc = $("#iDoc", root).value.trim(), tel = $("#iTel", root).value.trim();
+        if (!/^[0-9A-Za-z.\- ]{5,20}$/.test(doc)) throw new Error("Escribe tu número de documento.");
+        if (!/^\+?[0-9 ]{10,16}$/.test(tel)) throw new Error("Escribe tu celular (10 dígitos).");
+        if (!cancelar) return "📋 Quiero ver mis reservas\n" + lineas([["Documento", doc], ["Celular", tel]]);
+        const motivo = elegida(root, "motivo");
+        const extra = /vehículo|fechas/.test(motivo) ? "\n(Quiero cambiarla por la opción correcta)" : "";
+        return "❌ Quiero cancelar una reserva\n" + lineas([["Código", $("#iCod", root).value.trim().toUpperCase()], ["Documento", doc], ["Celular", tel], ["Motivo", motivo]]) + extra;
+      });
+  }
 
   function buildPanel() {
     panel.innerHTML = `<div class="wa">
       <div class="wa-head"><div class="wa-avatar" style="background:var(--ink);color:var(--gold)">${RR.marca.replace("<svg", '<svg width="24" height="15"')}</div><div><div class="wa-title">${RR.esc(RR.BUSINESS.name)}</div><div class="wa-sub" id="waStatus">en línea · asistente virtual</div></div><button class="x" id="waClose" aria-label="Cerrar">${I.x}</button></div>
       <div class="wa-body" id="waBody" aria-live="polite"></div>
-      <form class="wa-input" id="waForm"><input id="waText" placeholder="Escribe un mensaje" autocomplete="off" maxlength="1500"><button class="wa-send" aria-label="Enviar">${I.send}</button></form>
+      <div class="wa-menu hidden" id="waMenu" role="menu"></div>
+      <form class="wa-input" id="waForm"><button type="button" class="wa-ubic" id="waOps" aria-label="Opciones" title="Opciones (o escribe /)">${I.list}</button><button type="button" class="wa-ubic" id="waUbic" aria-label="Enviar mi ubicación" title="Enviar mi ubicación">${I.pin}</button><input id="waText" placeholder="Escribe un mensaje o / para opciones" autocomplete="off" maxlength="1500"><button class="wa-send" aria-label="Enviar">${I.send}</button></form>
       <div class="wa-note">Asistente con IA · un asesor humano revisa y confirma cada reserva</div>
     </div>`;
     $("#waClose").addEventListener("click", closeChat);
-    $("#waForm").addEventListener("submit", (e) => { e.preventDefault(); const t = $("#waText").value.trim(); if (!t || chat.enviando) return; $("#waText").value = ""; enviar(t); });
+    $("#waUbic").addEventListener("click", () => { if (!chat.enviando) { cerrarMenu(); enviarUbicacion(); } });
+    $("#waOps").addEventListener("click", () => ($("#waMenu").classList.contains("hidden") ? pintarMenu() : cerrarMenu()));
+    // Escribir «/» muestra las opciones y filtra mientras escribe (/cot, /cancelar…).
+    $("#waText").addEventListener("input", (e) => { const v = e.target.value; if (v.startsWith("/")) pintarMenu(v); else cerrarMenu(); });
+    $("#waText").addEventListener("keydown", (e) => {
+      if (e.key === "Escape") cerrarMenu();
+      if (e.key === "Enter" && e.target.value.startsWith("/")) { e.preventDefault(); const c = comandosQue(e.target.value)[0]; if (c) ejecutarComando(c.cmd); }
+    });
+    $("#waForm").addEventListener("submit", (e) => {
+      e.preventDefault(); const t = $("#waText").value.trim(); if (!t || chat.enviando) return;
+      if (t.startsWith("/")) { const c = comandosQue(t)[0]; if (c) { ejecutarComando(c.cmd); return; } }
+      cerrarMenu(); $("#waText").value = ""; enviar(t);
+    });
   }
 
   const body = () => $("#waBody");
@@ -349,8 +628,8 @@
   }
   function sugerencias() {
     const q = document.createElement("div"); q.className = "quick";
-    [["Quiero cotizar un vehículo", "Quiero cotizar un vehículo"], ["Solicitar un conductor", "Quiero solicitar un servicio con conductor"], ["Ver precios", "¿Cuáles son los precios?"], ["Ya soy cliente", "Ya he alquilado con ustedes antes y quiero reservar de nuevo"], ["Consultar mi reserva", "Quiero consultar mi reserva"], ["Requisitos", "¿Qué requisitos piden?"]]
-      .forEach(([l, t]) => { const b = document.createElement("button"); b.type = "button"; b.textContent = l; b.addEventListener("click", () => { q.remove(); enviar(t); }); q.appendChild(b); });
+    [["🚗 Cotizar un vehículo", "/cotizar"], ["🚕 Pedir un conductor", "/conductor"], ["📋 Mis reservas", "/reservas"], ["❌ Cancelar una reserva", "/cancelar"], ["Ver precios", "¿Cuáles son los precios?"], ["Requisitos", "¿Qué requisitos piden?"]]
+      .forEach(([l, t]) => { const b = document.createElement("button"); b.type = "button"; b.textContent = l; b.addEventListener("click", () => { if (t.startsWith("/")) { ejecutarComando(t.slice(1)); return; } q.remove(); enviar(t); }); q.appendChild(b); });
     body().appendChild(q); scroll();
   }
 
@@ -363,7 +642,7 @@
         if (d.mensajes.length) return;
       } catch (e) { chat.conv = null; try { localStorage.removeItem(CONV_KEY); } catch (_) {} }
     }
-    burbuja("ia", `¡Hola! 👋 Soy el asistente virtual de ${RR.BUSINESS.name}. Te ayudo a cotizar y reservar un vehículo, o a pedir un servicio con conductor. ¿En qué te ayudo?`);
+    burbuja("ia", `¡Hola! 👋 Soy el asistente virtual de ${RR.BUSINESS.name}. Te ayudo a cotizar y reservar un vehículo, o a pedir un servicio con conductor. Toca una opción o escribe tu mensaje (con */* ves el menú).`);
     if (!iaDisponible) burbuja("sistema", "El asistente automático no está activo en este momento. Escríbenos y un asesor te responderá, o usa el formulario de reserva.");
     sugerencias();
   }

@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { db, dias, fmtFechaHora, soloDigitos, TZ } from "./db";
 import { crearServicio } from "./servicios";
-import { ajustes, clientePorTelefono, crearReserva, mismoTel, negocio, normalizarDoc, perfilCliente, upsertCliente, vehiculosDisponibles, type Ajustes } from "./repo";
+import { ajustes, cancelarReservaCliente, clientePorTelefono, crearReserva, reservasDeCliente, HORAS_CANCELACION_LIBRE, mismoTel, negocio, normalizarDoc, perfilCliente, upsertCliente, vehiculosDisponibles, type Ajustes } from "./repo";
 
 type Msg = Anthropic.Beta.BetaMessageParam;
 export type Conv = { id: string; cliente_id: string | null; nombre: string; telefono: string | null; canal?: string; estado: string; historial_api: Msg[] };
@@ -61,6 +61,9 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
         lugar: { type: "string", description: "Uno de los lugares de recogida permitidos" },
         notas: { type: "string", description: "Propósito del viaje u observaciones" },
         autoriza_datos: { type: "boolean", description: "true solo si el cliente dijo explícitamente que autoriza el tratamiento de sus datos" },
+        direccion_entrega: { type: "string", description: "Solo si la entrega es a domicilio: dirección confirmada por el cliente (más indicaciones)" },
+        entrega_lat: { type: "number", description: "Latitud del enlace de Mapa que envió el cliente (📍), si la hay" },
+        entrega_lng: { type: "number", description: "Longitud del enlace de Mapa que envió el cliente (📍), si la hay" },
       },
       required: ["vehiculo_ids", "inicio", "fin", "lugar"],
       additionalProperties: false,
@@ -80,8 +83,29 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
         telefono: { type: "string", description: "Celular de contacto (en WhatsApp no hace falta)" },
         notas: { type: "string", description: "Ida y vuelta, equipaje, paradas, mascotas u otros detalles" },
         autoriza_datos: { type: "boolean", description: "true solo si el cliente autorizó explícitamente el tratamiento de sus datos" },
+        origen_lat: { type: "number", description: "Latitud del enlace de Mapa que envió el cliente (📍) para el punto de recogida, si la hay" },
+        origen_lng: { type: "number", description: "Longitud del enlace de Mapa que envió el cliente (📍) para el punto de recogida, si la hay" },
       },
       required: ["origen", "destino", "fecha_hora"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "mis_reservas",
+    description: "Muestra las reservas del cliente con su código, vehículo, fechas y estado. Solo funciona si el cliente ya está identificado: en WhatsApp por su número; en el chat web, después de identificar_cliente (documento y celular) o de haber creado una solicitud en esta conversación.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "cancelar_reserva",
+    description: "Cancela una reserva del cliente cuando ya no la quiere (desiste, se equivocó de carro o de fechas). Antes de usarla: identifica la reserva (con mis_reservas si no sabe el código), dile cuál vas a cancelar y pide que lo confirme. Solo cancela reservas del mismo cliente. Si se equivocó y quiere otro carro u otras fechas, primero crea la nueva solicitud y luego cancela la anterior.",
+    input_schema: {
+      type: "object",
+      properties: {
+        codigo: { type: "string", description: "Código de la reserva, por ejemplo RR-1234" },
+        motivo: { type: "string", description: "Por qué la cancela, en pocas palabras (si lo dijo)" },
+        confirmado: { type: "boolean", description: "true solo si el cliente confirmó explícitamente que quiere cancelar ESA reserva" },
+      },
+      required: ["codigo", "confirmado"],
       additionalProperties: false,
     },
   },
@@ -105,14 +129,25 @@ const In = {
     vehiculo_ids: z.array(z.string().uuid()).min(1).max(5).optional(), vehiculo_id: z.string().uuid().optional(), inicio: z.string().datetime({ offset: true }), fin: z.string().datetime({ offset: true }),
     nombre: z.string().min(3).max(120).optional(), documento: z.string().min(5).max(30).optional(), telefono: z.string().min(7).max(25).optional(), email: z.string().max(200).optional(),
     lugar: z.string().max(120), notas: z.string().max(500).optional(), autoriza_datos: z.boolean().optional(),
+    direccion_entrega: z.string().trim().min(3).max(300).optional(), entrega_lat: z.number().min(-4.5).max(13.6).optional(), entrega_lng: z.number().min(-82.2).max(-66.7).optional(),
   }),
   escalar_a_humano: z.object({ motivo: z.string().min(2).max(300) }),
+  cancelar_reserva: z.object({ codigo: z.string().trim().min(3).max(20), motivo: z.string().max(300).optional(), confirmado: z.boolean() }),
   solicitar_conductor: z.object({
     origen: z.string().trim().min(3).max(200), destino: z.string().trim().min(2).max(200), fecha_hora: z.string().datetime({ offset: true }),
     pasajeros: z.number().int().min(1).max(50).optional(), nombre: z.string().trim().min(2).max(120).optional(), telefono: z.string().min(7).max(25).optional(),
     notas: z.string().max(500).optional(), autoriza_datos: z.boolean().optional(),
+    origen_lat: z.number().min(-4.5).max(13.6).optional(), origen_lng: z.number().min(-82.2).max(-66.7).optional(),
   }),
 };
+
+/** Cliente al que pertenece la conversación: por su número de WhatsApp o el identificado en el chat web. */
+async function clienteDeConv(conv: Conv) {
+  if (esWhatsApp(conv)) return clientePorTelefono(conv.telefono!);
+  if (!conv.cliente_id) return null;
+  const [c] = await db()`select * from clientes where id = ${conv.cliente_id}`;
+  return c ?? null;
+}
 
 async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a: Ajustes): Promise<{ content: string; is_error?: boolean }> {
   const sql = db();
@@ -183,7 +218,8 @@ async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a
       const fallidas: { vehiculo_id: string; error: string }[] = [];
       let ultima: string | null = null;
       for (const vid of ids) {
-        const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: vid, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen, notas: [d.notas, c.alerta].filter(Boolean).join(" · "), actor: "Asistente IA" });
+        const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: vid, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen, notas: [d.notas, c.alerta].filter(Boolean).join(" · "), actor: "Asistente IA",
+          entrega: d.direccion_entrega ? { direccion: d.direccion_entrega, lat: d.entrega_lat ?? null, lng: d.entrega_lng ?? null } : null });
         if (!r.ok) { fallidas.push({ vehiculo_id: vid, error: r.error }); continue; }
         const v = r.reserva.vehiculo as { marca: string; modelo: string };
         creadas.push({ codigo: r.reserva.codigo, vehiculo: `${v.marca} ${v.modelo}`, total: r.reserva.total, deposito: r.reserva.deposito, vence: fmtFechaHora(r.reserva.expira_en) });
@@ -210,6 +246,7 @@ async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a
       if (!d.autoriza_datos && !base?.consentimiento_datos) return err("El cliente no ha autorizado el tratamiento de datos. Pídele la autorización explícita (su nombre y celular se comparten con el conductor asignado) antes de enviar el pedido.");
       const { servicio, publicado } = await crearServicio({
         nombre, telefono: tel, origen: d.origen, destino: d.destino, fecha: d.fecha_hora, pasajeros: d.pasajeros ?? 1, notas: d.notas,
+        origenLat: d.origen_lat ?? null, origenLng: d.origen_lng ?? null,
         conversacionId: conv.id, clienteId: base?.id ?? null, canal: esWhatsApp(conv) ? "whatsapp" : "chat",
       }, "Asistente IA");
       await sql`insert into mensajes (conversacion_id, emisor, texto) values (${conv.id}, 'sistema', ${`Servicio de conductor ${servicio.codigo} ${publicado ? "enviado a los conductores por WhatsApp" : "registrado (no llegó a ningún conductor; un asesor lo asignará)"}`})`;
@@ -219,6 +256,28 @@ async function ejecutarHerramienta(nombre: string, input: unknown, conv: Conv, a
           ? "Dile que su pedido ya está con los conductores y que, en cuanto uno lo tome, le avisaremos por este chat quién lo recoge. La tarifa la confirma el conductor o un asesor."
           : "Dile que su pedido quedó registrado y que un asesor le asignará el conductor y le confirmará la tarifa en breve.",
       });
+    }
+    case "mis_reservas": {
+      const c = await clienteDeConv(conv);
+      if (!c) return err(esWhatsApp(conv) ? "Este número no tiene reservas registradas." : "Primero identifica al cliente: pide documento y celular y usa identificar_cliente.");
+      const rs = await reservasDeCliente(c.id);
+      return ok({
+        cliente: c.nombre,
+        reservas: rs.map((r) => ({ codigo: r.codigo, vehiculo: `${r.marca} ${r.modelo}`, desde: fmtFechaHora(r.inicio), hasta: fmtFechaHora(r.fin), estado: r.estado, total: r.total,
+          ...(r.direccion_entrega ? { entrega_en: r.direccion_entrega } : { lugar: r.lugar }), ...(r.expira_en ? { pre_reserva_vence: fmtFechaHora(r.expira_en) } : {}) })),
+        nota: rs.length ? "Muéstralas en una lista corta (código, vehículo, fechas, estado)." : "No tiene reservas.",
+      });
+    }
+    case "cancelar_reserva": {
+      const p = In.cancelar_reserva.safeParse(input);
+      if (!p.success) return err("Indica el código de la reserva.");
+      if (!p.data.confirmado) return err("Antes de cancelar, dile al cliente qué reserva vas a cancelar (código, vehículo y fechas) y pide que lo confirme.");
+      const c = await clienteDeConv(conv);
+      if (!c) return err(esWhatsApp(conv) ? "Este número no tiene reservas registradas." : "Primero identifica al cliente: pide documento y celular y usa identificar_cliente.");
+      const r = await cancelarReservaCliente(c.id, p.data.codigo, p.data.motivo, `${c.nombre} (cliente, ${esWhatsApp(conv) ? "WhatsApp" : "chat web"})`);
+      if (!r.ok) return err(r.error + (r.asesor ? " Explícaselo y usa escalar_a_humano." : ""));
+      await sql`insert into mensajes (conversacion_id, emisor, texto) values (${conv.id}, 'sistema', ${`Reserva ${r.reserva.codigo} cancelada por el cliente`})`;
+      return ok({ cancelada: r.reserva.codigo, vehiculo: `${r.reserva.marca} ${r.reserva.modelo}`, siguiente_paso: "Confírmale que quedó cancelada y que el vehículo quedó libre. Pregúntale si quiere cotizar otro vehículo u otras fechas." });
     }
     case "escalar_a_humano": {
       const p = In.escalar_a_humano.safeParse(input);
@@ -249,6 +308,10 @@ Cómo atender:
 5. Si es cliente nuevo, antes de registrar pide autorización explícita para tratar sus datos personales con el fin de gestionar la reserva (Ley 1581 de 2012). Si no autoriza, no registres y ofrece un asesor.
 6. Registra con crear_solicitud_reserva y entrega el código de cada solicitud. Aclara que es una pre-reserva: un asesor revisa los documentos y confirma; tú nunca confirmas ni apruebas reservas.
 
+Cambiar de opinión: si el cliente ya no quiere una reserva (se arrepintió, se equivocó de carro o de fechas), ayúdale. Si no sabe el código, usa mis_reservas (en el chat web, primero identifícalo con documento y celular). Dile qué reserva vas a cancelar (código, vehículo y fechas), pide que lo confirme y usa cancelar_reserva con confirmado true. Si se equivocó de carro o de fechas, ofrécele la opción correcta: crea la nueva solicitud y luego cancela la anterior. Las pre-reservas se cancelan sin costo; las confirmadas, sin costo hasta ${HORAS_CANCELACION_LIBRE} horas antes de la recogida; si falta menos, lo revisa un asesor.
+
+Formularios del chat web: a veces el cliente llena un formulario y llega un mensaje con datos en líneas "Campo: valor" (por ejemplo "🚗 Quiero cotizar" con fechas, personas y lugar). Tómalos como respuestas ya dadas: no vuelvas a preguntar lo que ya está ahí y sigue con el siguiente paso (por ejemplo, consulta disponibilidad de inmediato).
+
 Catálogo de la agencia aliada: algunos vehículos (sobre todo camionetas) son de una agencia aliada; aparecen con catalogo "agencia aliada". Ofrécelos igual que los propios y regístralos con la misma herramienta.
 
 Servicio con conductor: si el cliente no quiere manejar y necesita que lo lleven (por ejemplo, al aeropuerto o a Felidia), pide origen exacto, destino, fecha y hora, cuántas personas, nombre y un celular (en WhatsApp no lo pidas), y su autorización para tratar sus datos (se comparten con el conductor asignado). Luego usa solicitar_conductor. No inventes tarifas del servicio: las confirma el conductor o un asesor.
@@ -257,7 +320,9 @@ Clientes nuevos y habituales: en WhatsApp ya sabes si el número está registrad
 
 Requisitos: edad mínima ${a.edadMinima} años; cédula o pasaporte; licencia ${a.licenciaVigente ? "vigente durante todo el alquiler, " : ""}categoría ${a.categorias.join(", ")}${a.depositoObligatorio ? "; depósito de garantía reembolsable (monto según vehículo)" : ""}${a.experienciaActiva ? `; al menos ${a.experienciaMin} años de experiencia conduciendo` : ""}.
 Condiciones: días de 24 horas; se entrega con tanque lleno y se devuelve igual; kilometraje libre dentro del Valle del Cauca; para viajar a otra ciudad el cliente debe avisar: desde 15 días de alquiler puede viajar a donde quiera con la tarifa normal, y en alquileres más cortos con recorrido largo (por ejemplo, 3 días a Bogotá) la tarifa la confirma un asesor; SOAT y seguro todo riesgo incluidos con deducible; cancelación sin costo hasta 48 horas antes; las pre-reservas se apartan ${a.prereservaHoras} horas.
-Lugares de entrega: ${a.lugares.join("; ")}. El negocio lleva el carro al cliente: si elige entrega a domicilio, pide la dirección o el barrio y anótalo en las notas de la solicitud. Si el cliente va a viajar fuera del Valle, anota el destino en las notas.
+Lugares de entrega: ${a.lugares.join("; ")}. El negocio lleva el carro al cliente: si elige entrega a domicilio, pide la dirección (puede enviar su ubicación con el botón 📍) y pásala en direccion_entrega. Si el cliente va a viajar fuera del Valle, anota el destino en las notas.
+
+Ubicaciones: un mensaje que empieza con "📍 Mi ubicación:" es la ubicación que el cliente compartió desde el mapa; trae la dirección aproximada, a veces indicaciones, y un enlace "Mapa: https://maps.google.com/?q=LAT,LNG". La dirección se calcula del mapa y puede no ser exacta: repítesela en una frase y pregúntale si es correcta o si quiere corregirla (puede escribir la dirección o moverla en el mapa). Ya confirmada, úsala: para entrega a domicilio pásala en direccion_entrega con entrega_lat y entrega_lng tomados del enlace; para el servicio con conductor úsala como origen con origen_lat y origen_lng. Si el cliente corrige la dirección escribiéndola, usa su texto y deja las coordenadas solo si el punto sigue siendo el mismo lugar.
 Horario de atención humana: ${a.horario}.${n.whatsapp ? ` WhatsApp: ${n.whatsapp}.` : ""}
 
 Transfiere a un asesor con escalar_a_humano cuando el cliente lo pida, quiera negociar precio o descuento, tenga una queja, un daño o accidente, pida devolver en otra ciudad u otra condición especial, o cuando no sepas la respuesta. Después de transferir, dile que un asesor le escribirá pronto.

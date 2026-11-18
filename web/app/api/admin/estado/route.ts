@@ -59,7 +59,7 @@ export async function GET() {
       noLeidos: c.no_leidos, ultima: new Date(c.ultima_actividad).toISOString(), mensajes: msgPor.get(c.id) ?? [],
     })),
     servicios: serv.map((s) => ({
-      id: s.id, codigo: s.codigo, conversacion: s.conversacion_id, cliente: s.cliente_id, nombre: s.nombre, tel: s.telefono, origen: s.origen, destino: s.destino,
+      id: s.id, codigo: s.codigo, conversacion: s.conversacion_id, cliente: s.cliente_id, nombre: s.nombre, tel: s.telefono, origen: s.origen, origenLat: s.origen_lat ?? null, origenLng: s.origen_lng ?? null, destino: s.destino,
       fecha: iso(s.fecha), pasajeros: s.pasajeros, notas: s.notas, estado: s.estado, conductor: s.conductor, tomado: iso(s.tomado_en), enviados: s.enviados ?? 0, canal: s.canal, creado: iso(s.creado_en),
     })),
     usuarios: usuarios.map((x) => ({ id: x.id, email: x.email, nombre: x.nombre, rol: x.rol, activo: x.activo, creado: iso(x.creado_en) })),

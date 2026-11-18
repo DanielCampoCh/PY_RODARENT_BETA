@@ -307,3 +307,35 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .visor .v-thumbs button { flex: 0 0 auto; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 2px solid transparent; padding: 0; opacity: .6; background: none; }
 .visor .v-thumbs button.on { border-color: var(--gold); opacity: 1; }
 .visor .v-thumbs img { width: 100%; height: 100%; object-fit: cover; border-radius: 0; }
+
+/* ---------- Ubicación (mapa del chat, búsqueda y reserva) ---------- */
+.ubic-mapa { height: 300px; max-height: 45vh; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: #efe9dc; display: grid; place-items: center; }
+.ubic-mapa.leaflet-container { display: block; }
+.ubic-pin { background: transparent; border: 0; color: var(--brand); filter: drop-shadow(0 2px 2px rgba(0,0,0,.35)); }
+.ubic-pin svg { width: 36px; height: 36px; fill: var(--gold); stroke: var(--ink); stroke-width: 1.4; }
+.loc-nota { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--text-2, inherit); background: #fbf5e4; border: 1px solid #ecd9a3; border-radius: 10px; padding: 8px 10px; margin-top: 6px; }
+.loc-nota svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; color: var(--brand); }
+.loc-nota span { min-width: 0; overflow-wrap: anywhere; }
+.link-btn { background: none; border: 0; padding: 0; margin-left: 4px; color: var(--brand); font-weight: 700; cursor: pointer; text-decoration: underline; font: inherit; font-weight: 700; }
+.wa-ubic { width: 38px; height: 38px; border-radius: 50%; border: 0; background: transparent; color: #54656f; display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
+.wa-ubic:hover { background: rgba(0,0,0,.06); color: var(--brand); }
+.wa-ubic svg { width: 20px; height: 20px; }
+
+/* ---------- Chat: menú de opciones y formularios rápidos ---------- */
+.wa-menu { background: #fff; border-top: 1px solid #e3e6e8; max-height: 300px; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; animation: rise .15s ease; }
+.wa-menu-t { font-size: 11px; color: #667781; padding: 4px 8px 6px; }
+.wa-op { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: transparent; border: 0; border-radius: 10px; padding: 8px; cursor: pointer; color: #111b21; }
+.wa-op:hover, .wa-op.sel { background: #f0f2f5; }
+.wa-op .ic { width: 32px; height: 32px; border-radius: 50%; background: #fbf5e4; color: var(--brand); display: grid; place-items: center; flex-shrink: 0; }
+.wa-op .ic svg { width: 16px; height: 16px; }
+.wa-op b { display: block; font-size: 13.5px; }
+.wa-op small { display: block; font-size: 12px; color: #667781; }
+.wa-op code { font-size: 11px; color: #8696a0; background: #f0f2f5; border-radius: 6px; padding: 2px 6px; }
+.opciones { display: flex; flex-wrap: wrap; gap: 6px; }
+.opciones button { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: 7px 13px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .12s, border-color .12s; }
+.opciones button:hover { border-color: var(--gold); }
+.opciones button.active { background: var(--ink); border-color: var(--ink); color: var(--gold); }
+.contador { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; align-self: flex-start; }
+.contador button { width: 40px; height: 40px; border: 0; background: var(--surface-2, #f5f3ee); font-size: 20px; font-weight: 700; cursor: pointer; color: var(--text); }
+.contador button:hover { background: #fbf5e4; color: var(--brand); }
+.contador output { min-width: 44px; text-align: center; font-weight: 700; font-size: 16px; }

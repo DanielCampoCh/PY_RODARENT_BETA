@@ -58,7 +58,7 @@ const Accion = z.discriminatedUnion("tipo", [
   }),
   // Edición completa de una reserva (vehículo, fechas, lugar, tarifa y notas).
   z.object({
-    tipo: z.literal("editar_reserva"), id, vehiculoId: id, inicio: fecha, fin: fecha, lugar: z.string().trim().min(2).max(120), notas: z.string().max(1000).default(""),
+    tipo: z.literal("editar_reserva"), id, vehiculoId: id, inicio: fecha, fin: fecha, lugar: z.string().trim().min(2).max(120), notas: z.string().max(1000).default(""), direccionEntrega: z.string().trim().max(300).optional(),
     precioDia: z.number().int().min(0), deposito: z.number().int().min(0), estado: z.enum(["pendiente", "aprobada", "en_curso", "finalizada", "rechazada", "vencida", "cancelada"]).optional(),
   }),
   z.object({ tipo: z.literal("borrar_reserva"), id }),
@@ -219,13 +219,17 @@ async function ejecutar(a: z.infer<typeof Accion>, u: Usuario): Promise<Record<s
       if (v.modalidad === "uber") throw new Fallo("Ese vehículo es de Uber: no se puede reservar.", 409);
       const n = dias(a.inicio, a.fin);
       const estado = a.estado ?? r.estado;
+      // Dirección de entrega: si el texto cambia, las coordenadas del cliente ya no corresponden y se quitan.
+      const dir = a.direccionEntrega === undefined ? r.direccion_entrega : a.direccionEntrega || null;
+      const dirCambio = (dir ?? "") !== (r.direccion_entrega ?? "");
+      if (dirCambio) await sql`update reservas set direccion_entrega = ${dir}, entrega_lat = null, entrega_lng = null where id = ${a.id}`;
       await sql`update reservas set vehiculo_id = ${a.vehiculoId}, inicio = ${a.inicio}, fin = ${a.fin}, lugar = ${a.lugar}, notas = ${a.notas},
         precio_dia = ${a.precioDia}, deposito = ${a.deposito}, dias = ${n}, total = ${n * a.precioDia}, estado = ${estado},
         expira_en = case when ${estado} = 'pendiente' then expira_en else null end where id = ${a.id}`;
       const cambios = [
         r.vehiculo_id !== a.vehiculoId && `vehículo → ${v.marca} ${v.modelo}`,
         (new Date(r.inicio).getTime() !== new Date(a.inicio).getTime() || new Date(r.fin).getTime() !== new Date(a.fin).getTime()) && `fechas → ${fmtFecha(a.inicio)}–${fmtFecha(a.fin)}`,
-        r.lugar !== a.lugar && `lugar → ${a.lugar}`, r.precio_dia !== a.precioDia && `tarifa → ${a.precioDia}/día`, r.deposito !== a.deposito && `depósito → ${a.deposito}`,
+        r.lugar !== a.lugar && `lugar → ${a.lugar}`, dirCambio && (dir ? `entrega → ${dir}` : "sin dirección de entrega"), r.precio_dia !== a.precioDia && `tarifa → ${a.precioDia}/día`, r.deposito !== a.deposito && `depósito → ${a.deposito}`,
         r.notas !== a.notas && "notas", estado !== r.estado && `estado → ${ETIQ[estado]}`,
       ].filter(Boolean).join(", ");
       await sql`insert into reserva_historial (reserva_id, texto, actor) values (${a.id}, ${`Editada: ${cambios || "sin cambios"}`}, ${actor})`;

@@ -1,120 +1,108 @@
-# RodaRent · aplicación funcional (Etapa 4–5)
+# RodaRent
 
-Sitio público + panel administrativo + asistente de IA, con base de datos real.
+Aplicación web para gestionar alquiler de vehículos y servicios de transporte con conductor. Incluye catálogo público, solicitudes de reserva, asistente de IA, panel administrativo e integración opcional con WhatsApp Business.
 
-| Parte | Qué hace |
-|---|---|
-| `/` | Catálogo con disponibilidad real, formulario de reserva y chat con el asistente de IA |
-| `/admin` | Panel con inicio de sesión (administrador / operador): reservas, calendario, vehículos, clientes, conversaciones, ajustes |
-| `app/api/*` | API en el servidor: valida todo, aplica permisos y guarda en PostgreSQL |
-| `lib/agent.ts` | Agente de IA (Claude) con herramientas: buscar disponibilidad, ver flota, identificar cliente, crear solicitud, pasar a un asesor |
-| `db/schema.sql` | Tablas. La base **impide** dos reservas activas del mismo vehículo en fechas que se cruzan |
+## Funcionalidades actuales
 
-## Reglas que cumple el sistema
+- **Sitio público (`/`)**: catálogo de vehículos disponibles, consulta de disponibilidad, solicitudes de pre-reserva, chat con el asistente y aviso de privacidad.
+- **Panel (`/admin`)**: inicio de sesión para administrador y operador; gestión de reservas, calendario, vehículos, clientes, conversaciones, conductores, servicios y ajustes.
+- **Reservas**: las solicitudes quedan pendientes para revisión humana y vencen según el plazo configurado (24 horas por defecto). El asistente no aprueba reservas. La base de datos impide reservas activas que se crucen para el mismo vehículo.
+- **Revisión de clientes**: los requisitos del cliente se revisan manualmente desde el panel. No hay integración automática con Verifik, RUNT u otras fuentes externas.
+- **Asistente**: usa Claude para responder preguntas, consultar disponibilidad y registrar solicitudes. Si no se configura `ANTHROPIC_API_KEY`, el chat ofrece el formulario de reserva.
+- **WhatsApp Business** (opcional): recibe mensajes, responde con el asistente y guarda las conversaciones. También permite enviar solicitudes a los conductores registrados; el primero que toma el servicio queda asignado.
+- **Alertas de flota**: el panel muestra alertas de vencimientos, mantenimiento y pico y placa para vehículos en modalidad Uber. Se pueden enviar por WhatsApp si la integración está configurada.
+- **Permisos y actividad**: administrador y operador tienen permisos distintos; las acciones administrativas quedan registradas.
 
-- Las solicitudes (web, chat o manuales sin verificar) quedan como **pre-reserva pendiente** y vencen solas (24 h por defecto, configurable).
-- Solo el **administrador** aprueba, y solo si los 5 requisitos del cliente están **verificados** a mano. La IA nunca aprueba.
-- El asistente solo muestra reservas de un cliente si da **documento y celular** que coinciden. Si un documento ya existe con otro celular, no se modifica y pasa a un asesor.
-- El asistente pide **autorización de datos** antes de registrar, y transfiere a un asesor si piden descuento, hay quejas o condiciones especiales.
-- El operador ve los documentos **enmascarados** y no puede aprobar, verificar, editar flota ni ajustes.
-- Toda acción del panel queda en el **registro de actividad**.
+La aplicación está en `web/`; el esquema de PostgreSQL, scripts y variables de entorno están en esa carpeta. `prototipo/` contiene un prototipo estático anterior.
 
-## Probar en tu computador
+## Desarrollo local
+
+Requiere Node.js 22 y npm.
 
 ```bash
 cd web
 npm install
 ```
 
-Copia `.env.example` como `.env.local` y llena las variables. Para una base local sin instalar nada:
+Copia `.env.example` como `.env.local` y configura, al menos, una `DATABASE_URL`, `SESSION_SECRET`, `ADMIN_EMAIL` y `ADMIN_PASSWORD`. La clave del administrador debe tener mínimo 8 caracteres. Para la base local incluida (PGlite), agrega a `.env.local`:
+
+```dotenv
+DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5434/postgres
+DB_POOL_MAX=1
+```
+
+Inicia la base de datos en una terminal y déjala abierta:
 
 ```bash
 npm run db:local
 ```
 
-(en otra terminal, con `DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/postgres` y `DB_POOL_MAX=1` en `.env.local`)
+En otra terminal, desde `web/`, crea el esquema y el usuario administrador, y luego inicia la aplicación:
 
 ```bash
 npm run db:setup
-```
-
-```bash
 npm run dev
 ```
 
-Abre http://localhost:3000 y http://localhost:3000/admin (entra con `ADMIN_EMAIL` / `ADMIN_PASSWORD`).
+Abre <http://localhost:3000> y <http://localhost:3000/admin>. `db:setup` carga datos de ejemplo si la base está vacía. Para probar el asistente configura también `ANTHROPIC_API_KEY`.
 
-## Publicar en Render (plan gratuito)
+Comandos útiles desde `web/`:
 
-El archivo `render.yaml` (en la raíz del repositorio) configura todo: carpeta `web`, compilación, creación de tablas y usuarios, y una `SESSION_SECRET` aleatoria.
-
-1. **Base de datos.** En https://neon.tech crea una cuenta y un proyecto (plan Free, región *AWS US East*). En *Connect* copia la cadena de conexión **pooled**.
-2. **Render.** En https://render.com entra con GitHub → *New* → **Blueprint** → elige el repositorio. Render lee `render.yaml` y te pide los valores:
-   `DATABASE_URL` (la de Neon), `ADMIN_EMAIL`, `ADMIN_PASSWORD` (8+ caracteres), `ADMIN_NOMBRE`, `ANTHROPIC_API_KEY`, `NEGOCIO_WHATSAPP`.
-3. **Apply.** Render compila y publica en una dirección `…onrender.com`.
-
-En el plan gratuito el servicio se duerme tras unos minutos sin visitas y la primera visita tarda cerca de un minuto en despertarlo: ábrelo un rato antes de cada demostración.
-
-## Publicar en Vercel (plan gratuito)
-
-Cada vez que Vercel publica, el script `vercel-build` crea las tablas que falten, carga los datos de ejemplo si la base está vacía y crea o actualiza los usuarios del panel con las variables `ADMIN_*` y `OPERADOR_*`. No hay que ejecutar nada en tu computador.
-
-1. **Proyecto.** En vercel.com → *Add New → Project* → importa el repositorio. En **Root Directory** elige `web`. Antes de *Deploy*, abre *Environment Variables*.
-2. **Variables** (los valores son tuyos; nunca los subas al repositorio):
-
-   | Variable | Valor |
-   |---|---|
-   | `SESSION_SECRET` | 64 caracteres aleatorios (genera uno con `npm run secreto`) |
-   | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NOMBRE` | Tu usuario del panel (clave de 8+ caracteres) |
-   | `OPERADOR_EMAIL` / `OPERADOR_PASSWORD` / `OPERADOR_NOMBRE` | Opcional: segundo usuario con permisos limitados |
-   | `ANTHROPIC_API_KEY` | Tu clave de https://console.anthropic.com |
-   | `CLAUDE_MODEL` | `claude-haiku-5-5` |
-   | `NEGOCIO_NOMBRE` / `NEGOCIO_CIUDAD` / `NEGOCIO_WHATSAPP` | Datos del negocio |
-
-   No pongas `DB_POOL_MAX` (solo es para la base local).
-3. **Base de datos.** En el proyecto → *Storage* → *Create Database* → **Neon** (plan Free) → conéctala al proyecto. Vercel agrega `DATABASE_URL` sola.
-4. **Publicar.** *Deployments* → *Redeploy* (para que tome la base). Al terminar, abre la URL `…vercel.app`, prueba el chat y entra a `/admin`.
-
-Si la compilación falla con "Falta DATABASE_URL", la base aún no está conectada al proyecto (paso 3).
-
-### Costos de referencia
-- Vercel Hobby y Neon Free: 0 USD. Sirven para la demostración; si el negocio lo usa en el día a día, Vercel pide el plan Pro (uso comercial).
-- IA con `claude-haiku-5-5`: 0,10 USD por millón de tokens de entrada y 0,50 por millón de salida; una conversación de reserva típica cuesta una fracción de centavo. Anthropic pide cargar un saldo mínimo para activar la clave.
-
-## Pendiente para las siguientes etapas
-- **WhatsApp Business (Cloud API):** el agente ya está listo; falta el webhook y la cuenta verificada de Meta.
-- **Carga segura de documentos** (cédula y licencia) con almacenamiento privado.
-- **Notificaciones** por correo/WhatsApp y **Google Calendar**.
-- Límite de mensajes por IP más robusto (hoy es en memoria por instancia).
-- Revisión legal del texto de tratamiento de datos.
-
-## WhatsApp Business (Cloud API)
-
-El mismo asistente responde por WhatsApp. Webhook: `https://TU-SERVICIO.onrender.com/api/whatsapp`.
-
-- **Entrante:** Meta envía cada mensaje al webhook; la app verifica la firma (`WHATSAPP_APP_SECRET`), ignora duplicados, responde con la IA y guarda todo en *Conversaciones*.
-- **Número verificado:** en WhatsApp el celular lo garantiza WhatsApp, así que el asistente no lo pide y lo usa para identificar al cliente y registrar la solicitud (origen *WhatsApp*).
-- **Asesor:** al *Tomar conversación* la IA se pausa y tus respuestas salen por WhatsApp. Meta solo permite texto libre dentro de las 24 h siguientes al último mensaje del cliente.
-- **Fotos, audios y documentos:** se registran en el panel y se pide escribir en texto (la lectura de documentos queda para otra etapa).
-
-Variables: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` (opcional `WHATSAPP_API_VERSION`, por defecto `v27.0`).
-
-Con el **número de prueba** de Meta (gratis) solo se puede chatear con hasta 5 números que registres en la app de Meta. Para atender a cualquier cliente se necesita un número propio y la verificación del negocio en Meta.
-
-## Verificación automática (Verifik)
-
-Con la autorización expresa del cliente (aparte de la de datos personales), la app consulta con su cédula:
-
-| Fuente | Qué marca como *verificado* |
+| Comando | Uso |
 |---|---|
-| RUNT | **Licencia**: activa, categoría permitida y vigente hasta el fin del alquiler |
-| Policía, RUNT y Procuraduría | **Identidad**: el nombre oficial coincide con el que dio el cliente |
-| Policía + Procuraduría | **Antecedentes**: "no tiene asuntos pendientes" y sin registros disciplinarios |
+| `npm run typecheck` | Comprueba los tipos de TypeScript |
+| `npm run build` | Compila la aplicación |
+| `npm run secreto` | Genera un valor aleatorio para `SESSION_SECRET` |
+| `npm run db:setup` | Crea o actualiza el esquema, datos iniciales y usuarios configurados |
+| `npm run db:local` | Inicia PostgreSQL local con PGlite |
 
-- Solo **sube** requisitos a *verificado*. Cualquier hallazgo, homónimo, licencia vencida o falla de la fuente queda **pendiente** para revisión humana; nunca rechaza solo ni pisa un *rechazado* puesto por una persona.
-- Al cliente nunca se le cuentan los hallazgos; solo que un asesor revisará.
-- Se puede lanzar desde el chat/WhatsApp (el agente pide la autorización), desde el formulario web (casilla opcional) o desde la ficha del cliente en el panel (solo administrador). Máximo una consulta automática por cliente cada 24 h desde el agente.
-- Cada consulta queda registrada por fuente (resultado, detalle, quién y cuándo). Solo el administrador ve los detalles.
-- En *Ajustes* se puede **exigir antecedentes verificados** para aprobar reservas.
+## Variables de entorno
 
-Variable: `VERIFIK_TOKEN` (cuenta en verifik.co; cada consulta consume créditos del plan).
+Consulta [`web/.env.example`](web/.env.example) para la lista completa. Las principales son:
+
+| Variable | Requerida | Descripción |
+|---|---|---|
+| `DATABASE_URL` | Sí | Conexión a PostgreSQL |
+| `SESSION_SECRET` | Sí | Secreto para firmar las sesiones del panel; usa una cadena aleatoria |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Sí para crear el administrador | Credenciales del panel |
+| `OPERADOR_EMAIL`, `OPERADOR_PASSWORD` | Opcional | Segundo usuario con permisos limitados |
+| `ANTHROPIC_API_KEY` | Opcional | Habilita las respuestas del asistente con Claude |
+| `CLAUDE_MODEL` | Opcional | Modelo de Claude; por defecto `claude-haiku-5-5` |
+| `NEGOCIO_NOMBRE`, `NEGOCIO_CIUDAD`, `NEGOCIO_WHATSAPP` | Recomendadas | Información del negocio |
+| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` | Opcional | Credenciales y verificación del webhook de Meta |
+| `CRON_SECRET` | Opcional | Protege la ruta de revisión diaria de alertas |
+
+No subas `.env.local` ni credenciales al repositorio. En producción, configura las variables en el panel de la plataforma.
+
+### WhatsApp Business
+
+Configura las variables `WHATSAPP_*` anteriores en Meta y en el servicio de alojamiento. La URL del webhook es:
+
+```text
+https://TU-DOMINIO/api/whatsapp
+```
+
+El webhook valida la firma de Meta y evita procesar dos veces el mismo mensaje. Los mensajes de texto se procesan con el asistente; fotos, audios y documentos no se leen automáticamente y requieren revisión de un asesor. Para enviar mensajes a conductores fuera de la ventana permitida por Meta, se necesitan plantillas aprobadas. Los conductores deben estar registrados y activos en el panel.
+
+### Alertas programadas
+
+El panel revisa las alertas al abrirse. Para hacer una revisión diaria externa, configura `CRON_SECRET` y llama a `GET /api/cron/alertas` con la cabecera `Authorization: Bearer <CRON_SECRET>`.
+
+## Despliegue
+
+La aplicación debe desplegarse usando `web/` como directorio raíz y una base de datos PostgreSQL accesible desde el servicio.
+
+### Render
+
+El archivo [`render.yaml`](render.yaml) configura el servicio con `web/` como raíz y ejecuta la preparación de la base de datos antes de compilar. En Render, crea un Blueprint desde este repositorio y proporciona la conexión PostgreSQL y las credenciales del administrador cuando te las solicite. `SESSION_SECRET` y `CRON_SECRET` se generan desde el Blueprint. Configura las variables `WHATSAPP_*` manualmente si vas a habilitar WhatsApp.
+
+### Vercel
+
+Importa el repositorio en Vercel y selecciona `web/` como **Root Directory**. Conecta una base PostgreSQL y configura las variables requeridas de la sección anterior. El script `vercel-build` prepara el esquema, carga datos de ejemplo si la base está vacía y crea o actualiza los usuarios configurados antes de compilar.
+
+## Funciones que aún requieren trabajo o configuración externa
+
+- WhatsApp requiere una cuenta de Meta, un número configurado y, para ciertos envíos, plantillas aprobadas.
+- Las fotos, audios y documentos enviados por WhatsApp no se procesan automáticamente.
+- No están integrados la carga privada de documentos, las notificaciones por correo ni Google Calendar.
+- La revisión de documentos y requisitos de clientes es manual.

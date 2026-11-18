@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { atender, type Conv } from "@/lib/agent";
 import { enviarTexto, firmaValida, telDesdeWaId, waConfig } from "@/lib/whatsapp";
 import { accionConductor, esAccionConductor } from "@/lib/servicios";
+import { direccionDe, enColombia, textoUbicacion } from "@/lib/geo";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -17,7 +18,7 @@ export async function GET(req: Request) {
   return new NextResponse("Token de verificación inválido", { status: 403 });
 }
 
-type WaMensaje = { id: string; from: string; type: string; text?: { body?: string }; button?: { text?: string; payload?: string }; interactive?: { button_reply?: { id?: string; title?: string }; list_reply?: { title?: string } } };
+type WaMensaje = { id: string; from: string; type: string; text?: { body?: string }; button?: { text?: string; payload?: string }; interactive?: { button_reply?: { id?: string; title?: string }; list_reply?: { title?: string } }; location?: { latitude?: number; longitude?: number; name?: string; address?: string } };
 type WaCambio = { value?: { messages?: WaMensaje[]; contacts?: { wa_id: string; profile?: { name?: string } }[] } };
 
 /** Mensajes entrantes. Responde 200 de inmediato y procesa después (Meta reintenta si tardamos). */
@@ -60,7 +61,14 @@ async function procesar(m: WaMensaje, nombrePerfil?: string) {
   if (!nuevo.length) return;
 
   const telefono = telDesdeWaId(m.from);
-  const texto = m.text?.body ?? m.button?.text ?? m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title;
+  let texto = m.text?.body ?? m.button?.text ?? m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title;
+  // Ubicación enviada con el clip 📎 → Ubicación: se convierte en el mismo texto que usa el chat web.
+  // (La ubicación «en tiempo real» de WhatsApp no la entrega la API; solo la ubicación actual o un punto elegido.)
+  if (!texto && m.type === "location" && m.location?.latitude != null && m.location?.longitude != null) {
+    const { latitude: lat, longitude: lng, name, address } = m.location;
+    const leida = address || (enColombia(lat, lng) ? (await direccionDe(lat, lng))?.direccion : null);
+    texto = textoUbicacion({ direccion: [name, leida].filter(Boolean).join(", ") || null, lat, lng });
+  }
 
   // Botón de un conductor (Tomar servicio, Terminado o Soltar): no pasa por el asistente.
   const payload = m.button?.payload ?? m.interactive?.button_reply?.id;
@@ -82,7 +90,7 @@ async function procesar(m: WaMensaje, nombrePerfil?: string) {
       // Fotos, audios o documentos: por ahora no se procesan automáticamente.
       const aviso = m.type === "image" || m.type === "document"
         ? "Recibí tu archivo 📎 Un asesor lo revisará. Por ahora, si quieres cotizar o reservar, escríbeme en texto."
-        : "Por ahora solo puedo leer mensajes de texto 🙏 ¿Me escribes tu consulta?";
+        : "Por ahora solo puedo leer mensajes de texto y ubicaciones 🙏 ¿Me escribes tu consulta? Si es tu ubicación en tiempo real, envíame mejor tu ubicación actual 📍";
       await sql`insert into mensajes (conversacion_id, emisor, texto) values (${conv.id}, 'cliente', ${`[${m.type}]`})`;
       await sql`insert into mensajes (conversacion_id, emisor, texto) values (${conv.id}, 'ia', ${aviso})`;
       await sql`update conversaciones set ultima_actividad = now(), no_leidos = no_leidos + 1 where id = ${conv.id}`;

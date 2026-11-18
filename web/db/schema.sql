@@ -233,3 +233,10 @@ create table if not exists vehiculo_fotos (
   check ((url is null) <> (datos is null))
 );
 create index if not exists vehiculo_fotos_veh_idx on vehiculo_fotos (vehiculo_id, orden);
+
+-- ---------- Ubicaciones compartidas por el cliente (mapa en la web o ubicación de WhatsApp) ----------
+alter table reservas add column if not exists direccion_entrega text;
+alter table reservas add column if not exists entrega_lat double precision;
+alter table reservas add column if not exists entrega_lng double precision;
+alter table servicios add column if not exists origen_lat double precision;
+alter table servicios add column if not exists origen_lng double precision;

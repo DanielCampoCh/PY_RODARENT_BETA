@@ -328,7 +328,7 @@
           ${r.estado === "pendiente" && r.expira ? `<div class="callout warn" style="margin-bottom:18px">${I.clock}<span>Pre-reserva: el vehículo queda bloqueado hasta el <b>${RR.fmtDT(r.expira)}</b> (${RR.relTime(r.expira)}). Si no se aprueba, se libera automáticamente.</span></div>` : ""}
           <div class="dsec"><h4>Vehículo y fechas</h4>
             <div class="row" style="gap:14px;margin-bottom:12px"><div style="width:110px">${RR.carSVG(vv.tipo, vv.color)}</div><div><b>${vname(vv)}</b> · ${vv.anio || ""}<div class="row" style="margin-top:6px"><span class="plate">${vv.placa || ""}</span>${vv.modalidad === "agencia" ? modBadge(vv) : ""}</div></div></div>
-            <dl class="kv"><dt>Recogida</dt><dd>${RR.fmtDT(r.inicio)}</dd><dt>Devolución</dt><dd>${RR.fmtDT(r.fin)}</dd><dt>Lugar</dt><dd>${esc(r.lugar)}</dd><dt>Total</dt><dd>${RR.money(r.total)} <span class="subtle small">(${r.dias} d × ${RR.money(r.precioDia)})</span></dd><dt>Depósito</dt><dd>${RR.money(r.deposito)}</dd>${r.notas ? `<dt>Notas</dt><dd>${esc(r.notas)}</dd>` : ""}</dl>
+            <dl class="kv"><dt>Recogida</dt><dd>${RR.fmtDT(r.inicio)}</dd><dt>Devolución</dt><dd>${RR.fmtDT(r.fin)}</dd><dt>Lugar</dt><dd>${esc(r.lugar)}</dd>${r.entrega ? `<dt>Entrega en</dt><dd>${esc(r.entrega.direccion)}${r.entrega.lat != null ? ` · <a href="https://maps.google.com/?q=${r.entrega.lat},${r.entrega.lng}" target="_blank" rel="noopener" style="color:var(--brand);font-weight:600">Ver en el mapa</a>` : ""}</dd>` : ""}<dt>Total</dt><dd>${RR.money(r.total)} <span class="subtle small">(${r.dias} d × ${RR.money(r.precioDia)})</span></dd><dt>Depósito</dt><dd>${RR.money(r.deposito)}</dd>${r.notas ? `<dt>Notas</dt><dd>${esc(r.notas)}</dd>` : ""}</dl>
           </div>
           <div class="dsec"><h4>Cliente</h4>
             <div class="row" style="gap:12px">${avatar(c.nombre)}<div class="grow"><div class="row" style="gap:8px"><b>${esc(c.nombre)}</b>${tipoBadge(c)}</div><div class="small muted">${esc(maskDoc(c.doc) || "Sin documento")} · ${esc(c.tel || "")}</div></div><button class="btn btn-sm" data-cli="${c.id}">Ver ficha</button></div>
@@ -999,7 +999,7 @@
           <td class="mono cell-main" style="white-space:nowrap">${esc(s.codigo)}<div class="cell-sub">${{ chat: "Chat web", whatsapp: "WhatsApp", manual: "Manual" }[s.canal]}</div></td>
           <td class="small">${RR.fmtDT(s.fecha)}</td>
           <td><div class="cell-main">${esc(s.nombre)}</div><div class="cell-sub">${esc(s.tel)}</div></td>
-          <td class="small" style="max-width:260px">${esc(s.origen)} → <b>${esc(s.destino)}</b>${s.notas ? `<div class="xs subtle">${esc(s.notas)}</div>` : ""}</td>
+          <td class="small" style="max-width:260px">${esc(s.origen)}${s.origenLat != null ? ` <a href="https://maps.google.com/?q=${s.origenLat},${s.origenLng}" target="_blank" rel="noopener" title="Ver en el mapa" style="color:var(--brand)">📍</a>` : ""} → <b>${esc(s.destino)}</b>${s.notas ? `<div class="xs subtle">${esc(s.notas)}</div>` : ""}</td>
           <td class="mono">${s.pasajeros}</td>
           <td class="small">${s.conductor ? esc(s.conductor) : '<span class="subtle">—</span>'}</td>
           <td>${servBadge(s)}${s.estado === "nuevo" ? `<div class="xs subtle" style="margin-top:3px">${s.enviados ? `Enviado a ${s.enviados} conductor(es)` : "No llegó a ningún conductor"}</div>` : ""}</td>
@@ -1123,6 +1123,7 @@
         <div class="field"><label for="erA">Recogida</label><input class="input" type="datetime-local" id="erA" value="${RR.toLocalInput(r.inicio)}"></div>
         <div class="field"><label for="erB">Devolución</label><input class="input" type="datetime-local" id="erB" value="${RR.toLocalInput(r.fin)}"></div>
         <div class="field full"><label for="erL">Lugar</label><select class="select" id="erL">${lugares.map((l) => `<option ${l === r.lugar ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>
+        <div class="field full"><label for="erDir">Dirección de entrega (domicilio)</label><input class="input" id="erDir" maxlength="300" value="${esc(r.entrega?.direccion || "")}" placeholder="Vacío si no es a domicilio"><span class="help">${r.entrega?.lat != null ? "Si cambias el texto, se quita el punto del mapa que envió el cliente." : "Escríbela si el cliente la dio por teléfono."}</span></div>
         <div class="field"><label for="erP">Tarifa por día (COP)</label><input class="input" type="number" id="erP" min="0" step="5000" value="${r.precioDia}"></div>
         <div class="field"><label for="erD">Depósito (COP)</label><input class="input" type="number" id="erD" min="0" step="50000" value="${r.deposito}"></div>
         <div class="field"><label for="erE">Estado</label><select class="select" id="erE">${Object.entries(RR.RES_STATUS).map(([k, s]) => `<option value="${k}" ${k === r.estado ? "selected" : ""}>${s.label}</option>`).join("")}</select></div>
@@ -1142,7 +1143,7 @@
     ["#erV", "#erA", "#erB", "#erP", "#erE"].forEach((q) => E(q).addEventListener("change", check)); check();
     E("#erOk").addEventListener("click", async () => {
       if (!check()) return;
-      const x = await act("editar_reserva", { id: r.id, vehiculoId: E("#erV").value, inicio: new Date(E("#erA").value).toISOString(), fin: new Date(E("#erB").value).toISOString(), lugar: E("#erL").value, precioDia: +E("#erP").value || 0, deposito: +E("#erD").value || 0, estado: E("#erE").value, notas: E("#erN").value.trim() }, "Reserva actualizada");
+      const x = await act("editar_reserva", { id: r.id, vehiculoId: E("#erV").value, inicio: new Date(E("#erA").value).toISOString(), fin: new Date(E("#erB").value).toISOString(), lugar: E("#erL").value, precioDia: +E("#erP").value || 0, deposito: +E("#erD").value || 0, estado: E("#erE").value, notas: E("#erN").value.trim(), direccionEntrega: E("#erDir").value.trim() }, "Reserva actualizada");
       if (x) { m.close(); after && after(); }
     });
     E("#erDel").addEventListener("click", async () => {

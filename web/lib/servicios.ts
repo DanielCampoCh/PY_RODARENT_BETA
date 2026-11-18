@@ -1,6 +1,7 @@
 import { db, fmtFechaHora, soloDigitos } from "./db";
 import { enviarBotones, enviarPlantilla, enviarTexto, plantillas, waConfig } from "./whatsapp";
 import { normalizarTel } from "./repo";
+import { enlaceMapa } from "./geo";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Row = Record<string, any>;
@@ -13,11 +14,14 @@ type Row = Record<string, any>;
 
 export type DatosServicio = {
   nombre: string; telefono: string; origen: string; destino: string; fecha: string; pasajeros: number; notas?: string;
+  origenLat?: number | null; origenLng?: number | null;
   conversacionId?: string | null; clienteId?: string | null; canal: "chat" | "whatsapp" | "manual";
 };
 
 const ultimos10 = (t: string) => soloDigitos(t).slice(-10);
 const primerNombre = (n: string) => String(n || "").split(" ")[0];
+/** Punto de recogida con el enlace al mapa cuando el cliente compartió su ubicación. */
+const origenConMapa = (s: Row) => (s.origen_lat != null && s.origen_lng != null ? `${s.origen} · Mapa: ${enlaceMapa(Number(s.origen_lat), Number(s.origen_lng))}` : s.origen);
 
 /** Conductor activo registrado con ese celular. */
 export async function conductorPorTelefono(tel: string) {
@@ -30,7 +34,7 @@ export async function conductorPorTelefono(tel: string) {
 /** Texto del servicio (para el mensaje con botones; la plantilla lleva los mismos datos como parámetros). */
 const textoServicio = (s: Row) => [
   `🚗 *Nuevo servicio ${s.codigo}*`,
-  `📍 Recoger en: ${s.origen}`,
+  `📍 Recoger en: ${origenConMapa(s)}`,
   `🏁 Destino: ${s.destino}`,
   `🕒 Cuándo: ${fmtFechaHora(s.fecha)}`,
   `👥 Pasajeros: ${s.pasajeros}`,
@@ -42,7 +46,7 @@ const textoServicio = (s: Row) => [
 /** Envía el servicio a un conductor: plantilla aprobada y, si no se puede, mensaje con botones (ventana de 24 h). */
 async function enviarAConductor(tel: string, s: Row) {
   try {
-    await enviarPlantilla(tel, plantillas().servicio, [s.codigo, s.origen, s.destino, fmtFechaHora(s.fecha), String(s.pasajeros), s.notas || "Sin notas"], [`tomar:${s.id}`]);
+    await enviarPlantilla(tel, plantillas().servicio, [s.codigo, origenConMapa(s), s.destino, fmtFechaHora(s.fecha), String(s.pasajeros), s.notas || "Sin notas"], [`tomar:${s.id}`]);
     return "plantilla";
   } catch (e) {
     try { await enviarBotones(tel, textoServicio(s), [{ id: `tomar:${s.id}`, titulo: "Tomar servicio" }]); return "botones"; }
@@ -68,8 +72,8 @@ export async function publicarServicio(s: Row, excluirTel?: string | null): Prom
 /** Registra un servicio de conductor y lo envía a los conductores. */
 export async function crearServicio(d: DatosServicio, actor: string) {
   const sql = db();
-  const [s] = await sql`insert into servicios (conversacion_id, cliente_id, nombre, telefono, origen, destino, fecha, pasajeros, notas, canal)
-    values (${d.conversacionId ?? null}, ${d.clienteId ?? null}, ${d.nombre}, ${normalizarTel(d.telefono)}, ${d.origen}, ${d.destino}, ${d.fecha}, ${d.pasajeros}, ${d.notas ?? ""}, ${d.canal}) returning *`;
+  const [s] = await sql`insert into servicios (conversacion_id, cliente_id, nombre, telefono, origen, destino, fecha, pasajeros, notas, canal, origen_lat, origen_lng)
+    values (${d.conversacionId ?? null}, ${d.clienteId ?? null}, ${d.nombre}, ${normalizarTel(d.telefono)}, ${d.origen}, ${d.destino}, ${d.fecha}, ${d.pasajeros}, ${d.notas ?? ""}, ${d.canal}, ${d.origenLat ?? null}, ${d.origenLng ?? null}) returning *`;
   let r = { enviados: 0, fallidos: [] as string[] };
   try { r = await publicarServicio(s); } catch (e) { console.error("[servicios] publicar", e instanceof Error ? e.message : e); }
   await sql`insert into notificaciones (texto) values (${`Servicio de conductor ${s.codigo}: ${d.origen} → ${d.destino}, ${fmtFechaHora(d.fecha)}${r.enviados ? ` · enviado a ${r.enviados} conductor(es) por WhatsApp` : " · NO llegó a ningún conductor: asígnalo desde Conductores"}`})`;
@@ -145,14 +149,14 @@ export async function accionConductor(telefono: string, payload: string) {
     await enviarBotones(c.telefono, [
       `✅ *El servicio ${x.codigo} es tuyo.*`,
       `👤 Cliente: ${x.nombre} · 📞 ${x.telefono}`,
-      `📍 Recoger en: ${x.origen}`,
+      `📍 Recoger en: ${origenConMapa(x)}`,
       `🏁 Destino: ${x.destino}`,
       `🕒 ${fmtFechaHora(x.fecha)} · 👥 ${x.pasajeros} pasajero(s)`,
       x.notas ? `📝 ${x.notas}` : "",
       "",
       "Escríbele al cliente para coordinar. Cuando termines, pulsa *Terminado*. Si no puedes hacerlo, pulsa *Soltar* y se le envía a los demás.",
     ].filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n"), [{ id: `fin:${x.id}`, titulo: "Terminado" }, { id: `soltar:${x.id}`, titulo: "Soltar" }])
-      .catch(() => responder(`✅ El servicio ${x.codigo} es tuyo. Cliente: ${x.nombre} · ${x.telefono}. Recoger en ${x.origen} el ${fmtFechaHora(x.fecha)}.`));
+      .catch(() => responder(`✅ El servicio ${x.codigo} es tuyo. Cliente: ${x.nombre} · ${x.telefono}. Recoger en ${origenConMapa(x)} el ${fmtFechaHora(x.fecha)}.`));
     return;
   }
   if (!esSuyo) { await responder(`Solo ${s.conductor ?? "el conductor asignado"} puede cambiar el servicio ${s.codigo}.`); return; }

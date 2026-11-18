@@ -4,6 +4,7 @@ import { ajustes, clientePorDocYTel, crearReserva, upsertCliente } from "@/lib/r
 import { excedeLimite, ipDe } from "@/lib/limite";
 
 const fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const FUERA = "El punto de entrega quedó fuera de Colombia: muévelo en el mapa.";
 const Body = z.object({
   habitual: z.boolean().optional().default(false),
   vehiculo: z.string().uuid(),
@@ -21,13 +22,19 @@ const Body = z.object({
   notas: z.string().max(500).optional().default(""),
   consentimiento: z.literal(true, { message: "Debes autorizar el tratamiento de datos." }),
   marketing: z.boolean().optional().default(false),
+  // Entrega a domicilio: dirección elegida en el mapa (se puede corregir a mano) y sus coordenadas.
+  entrega: z.object({
+    direccion: z.string().trim().min(3, "Escribe la dirección de entrega.").max(300),
+    lat: z.number().min(-4.5, FUERA).max(13.6, FUERA).nullable().optional(),
+    lng: z.number().min(-82.2, FUERA).max(-66.7, FUERA).nullable().optional(),
+  }).optional(),
 });
 
 /** Solicitud de reserva desde el sitio público. Valida requisitos en el servidor. */
 export async function POST(req: Request) {
   if (excedeLimite("reservas:" + ipDe(req), 10, 10 * 60000)) return NextResponse.json({ error: "Demasiadas solicitudes seguidas. Espera unos minutos." }, { status: 429 });
   const parsed = Body.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.issues.map((i) => i.message).join(" ") }, { status: 400 });
+  if (!parsed.success) return NextResponse.json({ error: [...new Set(parsed.error.issues.map((i) => i.message))].join(" ") }, { status: 400 });
   const d = parsed.data;
   const a = await ajustes();
 
@@ -63,7 +70,7 @@ export async function POST(req: Request) {
   });
   if (!c.ok) return NextResponse.json({ error: c.error }, { status: 409 });
 
-  const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: d.vehiculo, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen: "web", notas: [d.notas, c.alerta].filter(Boolean).join(" · "), actor: d.habitual ? "Cliente habitual (web)" : "Cliente (web)" });
+  const r = await crearReserva({ clienteId: c.cliente.id, vehiculoId: d.vehiculo, inicio: d.inicio, fin: d.fin, lugar: d.lugar, origen: "web", notas: [d.notas, c.alerta].filter(Boolean).join(" · "), actor: d.habitual ? "Cliente habitual (web)" : "Cliente (web)", entrega: d.entrega ?? null });
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: 409 });
   const res = r.reserva;
   return NextResponse.json({ codigo: res.codigo, inicio: res.inicio, fin: res.fin, total: res.total, expira: res.expira_en, estado: res.estado, // Con celular distinto no se revela el nombre registrado: se usa el que escribió quien reserva.

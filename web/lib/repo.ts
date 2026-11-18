@@ -1,4 +1,4 @@
-import { db, dias, esCruce, soloDigitos } from "./db";
+import { db, dias, esCruce, fmtFechaHora, soloDigitos } from "./db";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Row = Record<string, any>;
@@ -70,6 +70,8 @@ export const mapReserva = (r: Row, historial: Row[] = []) => ({
   id: r.id, codigo: r.codigo, cliente: r.cliente_id, vehiculo: r.vehiculo_id, inicio: iso(r.inicio), fin: iso(r.fin), lugar: r.lugar, devolucion: r.lugar,
   estado: r.estado, expira: iso(r.expira_en), origen: r.origen, precioDia: r.precio_dia, dias: r.dias, total: r.total, deposito: r.deposito,
   notas: r.notas, creado: iso(r.creado_en), nueva: r.nueva,
+  // Dirección de entrega a domicilio (si el cliente la dio en el mapa o el bot la anotó).
+  entrega: r.direccion_entrega ? { direccion: r.direccion_entrega, lat: r.entrega_lat ?? null, lng: r.entrega_lng ?? null } : null,
   historial: historial.map((h) => ({ fecha: iso(h.fecha), texto: h.texto, actor: h.actor })),
 });
 
@@ -194,6 +196,8 @@ export async function perfilCliente(c: Row, finReserva?: string) {
 export async function crearReserva(p: {
   clienteId: string; vehiculoId: string; inicio: string; fin: string; lugar: string; origen: "web" | "chat" | "manual" | "whatsapp";
   estado?: "pendiente" | "aprobada"; notas?: string; actor: string;
+  /** Entrega a domicilio: dirección escrita y, si se tienen, coordenadas del mapa. */
+  entrega?: { direccion: string; lat?: number | null; lng?: number | null } | null;
 }): Promise<{ ok: true; reserva: Row } | { ok: false; error: string }> {
   await expirar();
   const [v] = await db()`select * from vehiculos where id = ${p.vehiculoId}`;
@@ -207,10 +211,13 @@ export async function crearReserva(p: {
   const estado = p.estado ?? "pendiente";
   const n = dias(p.inicio, p.fin);
   try {
-    const [r] = await db()`insert into reservas (cliente_id, vehiculo_id, inicio, fin, lugar, estado, expira_en, origen, precio_dia, dias, total, deposito, notas, nueva)
+    const ent = p.entrega?.direccion?.trim() ? p.entrega : null;
+    const [r] = await db()`insert into reservas (cliente_id, vehiculo_id, inicio, fin, lugar, estado, expira_en, origen, precio_dia, dias, total, deposito, notas, nueva,
+        direccion_entrega, entrega_lat, entrega_lng)
       values (${p.clienteId}, ${v.id}, ${p.inicio}, ${p.fin}, ${p.lugar}, ${estado},
         ${estado === "pendiente" ? new Date(Date.now() + prereservaHoras * 3600000) : null}, ${p.origen},
-        ${v.precio_dia}, ${n}, ${n * v.precio_dia}, ${v.deposito}, ${p.notas ?? ""}, ${p.origen !== "manual"}) returning *`;
+        ${v.precio_dia}, ${n}, ${n * v.precio_dia}, ${v.deposito}, ${p.notas ?? ""}, ${p.origen !== "manual"},
+        ${ent ? ent.direccion.trim().slice(0, 300) : null}, ${ent?.lat ?? null}, ${ent?.lng ?? null}) returning *`;
     const etiqueta = { web: "Web", chat: "Chat web", manual: "Manual", whatsapp: "WhatsApp" }[p.origen];
     await db()`insert into reserva_historial (reserva_id, texto, actor) values (${r.id}, ${`Solicitud creada (${etiqueta})`}, ${p.actor})`;
     await db()`insert into auditoria (actor, accion) values (${p.actor}, ${`Creó ${r.codigo} (${v.marca} ${v.modelo})`})`;
@@ -220,4 +227,40 @@ export async function crearReserva(p: {
     if (esCruce(e)) return { ok: false, error: "Ese vehículo ya está reservado en esas fechas." };
     throw e;
   }
+}
+
+/** Reservas de un cliente (las más recientes primero), para que el asistente se las muestre. */
+export async function reservasDeCliente(clienteId: string) {
+  await expirar();
+  return db()`select r.id, r.codigo, r.inicio, r.fin, r.estado, r.total, r.deposito, r.lugar, r.direccion_entrega, r.expira_en, v.marca, v.modelo
+    from reservas r join vehiculos v on v.id = r.vehiculo_id where r.cliente_id = ${clienteId} order by r.inicio desc limit 10`;
+}
+
+/** Horas antes de la recogida hasta las que el cliente cancela solo y sin costo (condición publicada). */
+export const HORAS_CANCELACION_LIBRE = 48;
+
+/**
+ * El cliente desiste de una reserva suya (por el chat o WhatsApp).
+ * - Pre-reserva pendiente: se cancela siempre y el carro queda libre.
+ * - Confirmada: solo si faltan 48 horas o más; si falta menos, decide un asesor (puede haber costo).
+ * - En curso o terminada: no se cancela por aquí.
+ */
+export async function cancelarReservaCliente(clienteId: string, codigo: string, motivo: string | undefined, actor: string):
+  Promise<{ ok: true; reserva: Row } | { ok: false; error: string; asesor?: boolean }> {
+  await expirar();
+  const cod = codigo.trim().toUpperCase();
+  const [r] = await db()`select r.*, v.marca, v.modelo from reservas r join vehiculos v on v.id = r.vehiculo_id where upper(r.codigo) = ${cod} and r.cliente_id = ${clienteId}`;
+  if (!r) return { ok: false, error: "No encontré una reserva con ese código a nombre de este cliente." };
+  if (r.estado === "cancelada") return { ok: false, error: `La reserva ${r.codigo} ya estaba cancelada.` };
+  if (!["pendiente", "aprobada"].includes(r.estado)) return { ok: false, error: `La reserva ${r.codigo} está ${r.estado.replace("_", " ")}: no se puede cancelar por aquí.`, asesor: r.estado === "en_curso" };
+  const horas = (new Date(r.inicio).getTime() - Date.now()) / 3600000;
+  if (r.estado === "aprobada" && horas < HORAS_CANCELACION_LIBRE)
+    return { ok: false, asesor: true, error: `La reserva ${r.codigo} ya está confirmada y faltan menos de ${HORAS_CANCELACION_LIBRE} horas para la recogida: la cancelación la revisa un asesor (puede tener costo).` };
+  const nota = motivo?.trim() ? ` · Motivo: ${motivo.trim().slice(0, 200)}` : "";
+  const [x] = await db()`update reservas set estado = 'cancelada', expira_en = null, nueva = true where id = ${r.id} and estado in ('pendiente', 'aprobada') returning *`;
+  if (!x) return { ok: false, error: "La reserva cambió mientras tanto; vuelve a consultarla." };
+  await db()`insert into reserva_historial (reserva_id, texto, actor) values (${r.id}, ${`Cancelada por el cliente${nota}`}, ${actor})`;
+  await db()`insert into auditoria (actor, accion) values (${actor}, ${`El cliente canceló ${r.codigo}${nota}`})`;
+  await db()`insert into notificaciones (texto) values (${`El cliente canceló ${r.codigo} (${r.marca} ${r.modelo}, ${fmtFechaHora(r.inicio)})${nota}. El carro quedó libre.`})`;
+  return { ok: true, reserva: { ...x, marca: r.marca, modelo: r.modelo } };
 }
