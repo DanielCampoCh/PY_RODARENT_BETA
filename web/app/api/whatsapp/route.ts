@@ -4,6 +4,7 @@ import { atender, type Conv } from "@/lib/agent";
 import { enviarTexto, firmaValida, telDesdeWaId, waConfig } from "@/lib/whatsapp";
 import { accionConductor, esAccionConductor } from "@/lib/servicios";
 import { direccionDe, enColombia, textoUbicacion } from "@/lib/geo";
+import { comandoDe, ejecutarComandoWa, enviarMenu } from "@/lib/menu-whatsapp";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -18,7 +19,7 @@ export async function GET(req: Request) {
   return new NextResponse("Token de verificación inválido", { status: 403 });
 }
 
-type WaMensaje = { id: string; from: string; type: string; text?: { body?: string }; button?: { text?: string; payload?: string }; interactive?: { button_reply?: { id?: string; title?: string }; list_reply?: { title?: string } }; location?: { latitude?: number; longitude?: number; name?: string; address?: string } };
+type WaMensaje = { id: string; from: string; type: string; text?: { body?: string }; button?: { text?: string; payload?: string }; interactive?: { button_reply?: { id?: string; title?: string }; list_reply?: { id?: string; title?: string } }; location?: { latitude?: number; longitude?: number; name?: string; address?: string } };
 type WaCambio = { value?: { messages?: WaMensaje[]; contacts?: { wa_id: string; profile?: { name?: string } }[] } };
 
 /** Mensajes entrantes. Responde 200 de inmediato y procesa después (Meta reintenta si tardamos). */
@@ -66,7 +67,8 @@ async function procesar(m: WaMensaje, nombrePerfil?: string) {
   // (La ubicación «en tiempo real» de WhatsApp no la entrega la API; solo la ubicación actual o un punto elegido.)
   if (!texto && m.type === "location" && m.location?.latitude != null && m.location?.longitude != null) {
     const { latitude: lat, longitude: lng, name, address } = m.location;
-    const leida = address || (enColombia(lat, lng) ? (await direccionDe(lat, lng))?.direccion : null);
+    const d = !address && enColombia(lat, lng) ? await direccionDe(lat, lng) : null;
+    const leida = address || (d ? d.direccion + (d.aproximado ? " (número aproximado)" : !d.numero ? " (sin número de casa)" : "") : null);
     texto = textoUbicacion({ direccion: [name, leida].filter(Boolean).join(", ") || null, lat, lng });
   }
 
@@ -97,10 +99,20 @@ async function procesar(m: WaMensaje, nombrePerfil?: string) {
       await enviarTexto(m.from, aviso);
       return;
     }
+    // Menú y comandos (/cotizar, «menú», opción de la lista…).
+    const primera = !((conv.historial_api as unknown[] | null)?.length);
+    const cmd = comandoDe(texto, m.interactive?.list_reply?.id);
+    if (cmd) {
+      const c = await ejecutarComandoWa(conv as { id: string; estado: string }, m.from, cmd, texto);
+      if (c?.hecho) { console.log(`[whatsapp] Comando /${cmd} para …${m.from.slice(-4)}`); return; }
+      if (c) texto = c.texto;
+    }
     const r = await atender(conv as unknown as Conv, texto.slice(0, 1500));
     if (r.respuesta) {
       await enviarTexto(m.from, r.respuesta);
       console.log(`[whatsapp] Respuesta enviada a …${m.from.slice(-4)} (estado: ${r.estado})`);
+      // Primera vez que escribe: además de la respuesta, el menú de opciones.
+      if (primera && !cmd && r.estado !== "humano") await enviarMenu(m.from, "Si prefieres, elige una opción 👇").catch((e) => console.error("[whatsapp] menú:", e instanceof Error ? e.message : e));
     } else console.log(`[whatsapp] Sin respuesta automática para …${m.from.slice(-4)} (conversación con asesor)`);
   } catch (e) {
     console.error(`[whatsapp] Error con el mensaje de …${m.from.slice(-4)}:`, e instanceof Error ? e.message : e);

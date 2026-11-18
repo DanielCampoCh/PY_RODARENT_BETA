@@ -36,5 +36,6 @@ services:
         sync: false
       - key: CRON_SECRET
         generateValue: true
+      # Opcional: GOOGLE_MAPS_API_KEY (direcciones exactas con número) se configura a mano en Render.
       # WhatsApp Business: WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_APP_SECRET y
       # WHATSAPP_VERIFY_TOKEN se configuran a mano en Render (en el servicio o en un Environment Group).

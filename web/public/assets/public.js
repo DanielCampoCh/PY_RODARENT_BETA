@@ -188,18 +188,37 @@
       m.el.querySelector(".modal").style.maxWidth = "560px";
       const estado = (t, err) => { const e = $m("#uEstado"); e.textContent = t; e.style.color = err ? "var(--danger)" : ""; };
       let punto = previa && previa.lat != null ? { lat: previa.lat, lng: previa.lng } : null;
-      let mapa = null, pin = null, editadaAMano = !!(previa && previa.direccion), pedido = 0;
+      let mapa = null, pin = null, editadaAMano = !!(previa && previa.direccion), pedido = 0, avisadoNumero = false;
 
       async function leerDireccion() {
         if (!punto) return;
         const n = ++pedido;
         estado("Buscando la dirección…");
         try {
-          const r = await RR.api(`/api/ubicacion?lat=${punto.lat.toFixed(6)}&lng=${punto.lng.toFixed(6)}`);
+          const q = `/api/ubicacion?lat=${punto.lat.toFixed(6)}&lng=${punto.lng.toFixed(6)}`;
+          const r = await RR.api(q);
           if (n !== pedido) return;
-          if (!editadaAMano || !$m("#uDir").value.trim()) $m("#uDir").value = r.direccion;
-          estado("Revisa la dirección: si no es exacta, corrígela a mano.");
+          const dir = $m("#uDir");
+          if (editadaAMano && dir.value.trim()) { estado("Revisa la dirección: si no es exacta, corrígela a mano."); return; }
+          dir.value = r.direccion;
+          if (r.numero || !r.via) { estado("Revisa la dirección: si no es exacta, corrígela a mano."); return; }
+          // Sin número de casa: se estima aparte (puede tardar) y mientras tanto se puede escribir.
+          estado(`Buscando el número de la casa sobre la ${r.via}…`);
+          const r2 = await RR.api(q + "&numero=1").catch(() => null);
+          if (n !== pedido) return;
+          if (r2 && r2.numero && dir.value === r.direccion) {
+            dir.value = r2.direccion;
+            estado(`Número aproximado (${r2.numero}): confírmalo con la fachada o corrígelo.`);
+          } else if (dir.value === r.direccion) {
+            faltaNumero(r.via);
+          }
         } catch (e) { if (n === pedido) estado(e.message + " Escríbela a mano.", true); }
+      }
+      /** Deja el cursor justo después de la vía para que el cliente escriba «# 3-45». */
+      function faltaNumero(via) {
+        const dir = $m("#uDir"), i = dir.value.indexOf(via);
+        estado(`Falta el número de la casa: escríbelo después de «${via}» (ej.: # 3-45).`, true);
+        if (i >= 0) { dir.focus(); const fin = i + via.length; dir.setSelectionRange(fin, fin); }
       }
       function ponerPunto(lat, lng, { leer = true, centrar = true } = {}) {
         punto = { lat, lng };
@@ -246,6 +265,10 @@
       $m("#uOk").addEventListener("click", () => {
         const direccion = $m("#uDir").value.trim();
         if (direccion.length < 3) { estado("Escribe la dirección o elige un punto en el mapa.", true); $m("#uDir").focus(); return; }
+        // Una dirección de Cali sin número («Carrera 24, San Cristóbal») se avisa una vez; si insiste, se envía así.
+        if (/\b(calle|carrera|cra|cl|kr|avenida|av|diagonal|transversal)\b/i.test(direccion) && !/#|\bno\.?\s*\d|\d+\s*-\s*\d+/i.test(direccion) && !avisadoNumero) {
+          avisadoNumero = true; estado("Falta el número de la casa (ej.: Carrera 24 # 3-45). Escríbelo, o toca otra vez el botón para enviarla así.", true); $m("#uDir").focus(); return;
+        }
         fin({ direccion, indicaciones: $m("#uInd").value.trim(), lat: punto ? +punto.lat.toFixed(6) : null, lng: punto ? +punto.lng.toFixed(6) : null });
         m.close();
       });

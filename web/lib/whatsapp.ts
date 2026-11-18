@@ -116,3 +116,25 @@ export const enviarPlantilla = (para: string, nombre: string, parametros: string
       ],
     },
   });
+
+/* ---------- Menú del bot (lista de opciones) y botón para pedir la ubicación ---------- */
+export type FilaLista = { id: string; titulo: string; descripcion?: string };
+
+/** Lista desplegable con hasta 10 opciones (botón «Ver opciones»). Solo dentro de la ventana de 24 horas. */
+export const enviarLista = (para: string, texto: string, boton: string, filas: FilaLista[], titulo?: string) =>
+  enviarWa({
+    to: para.replace(/\D/g, ""), type: "interactive",
+    interactive: {
+      type: "list",
+      ...(titulo ? { header: { type: "text", text: titulo.slice(0, 60) } } : {}),
+      body: { text: formatoWhatsApp(texto).slice(0, 1024) },
+      action: { button: boton.slice(0, 20), sections: [{ title: "Opciones", rows: filas.slice(0, 10).map((f) => ({ id: f.id.slice(0, 200), title: f.titulo.slice(0, 24), ...(f.descripcion ? { description: f.descripcion.slice(0, 72) } : {}) })) }] },
+    },
+  });
+
+/** Mensaje con el botón «Enviar ubicación» de WhatsApp: el cliente la comparte con un toque. */
+export const enviarPedirUbicacion = (para: string, texto: string) =>
+  enviarWa({
+    to: para.replace(/\D/g, ""), type: "interactive",
+    interactive: { type: "location_request_message", body: { text: formatoWhatsApp(texto).slice(0, 1024) }, action: { name: "send_location" } },
+  });

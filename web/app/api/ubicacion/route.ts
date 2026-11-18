@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * Ayuda a la página a mostrar la dirección del pin del mapa:
- *   GET /api/ubicacion?lat=3.45&lng=-76.53  → { direccion, barrio, ciudad }
+ *   GET /api/ubicacion?lat=3.45&lng=-76.53  → { direccion, barrio, ciudad, via }
+ *   GET /api/ubicacion?lat=…&lng=…&numero=1 → además estima el número («# 3-45», aproximado: true)
  *   GET /api/ubicacion?q=Calle 5 # 38-20     → { lat, lng, direccion }
  * No guarda nada: la ubicación solo se guarda si el cliente la envía en el chat o en la reserva.
  */
@@ -21,6 +22,8 @@ export async function GET(req: Request) {
   }
   const lat = Number(p.get("lat")), lng = Number(p.get("lng"));
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || !enColombia(lat, lng)) return NextResponse.json({ error: "Ubicación fuera de Colombia o inválida." }, { status: 400 });
-  const d = await direccionDe(lat, lng);
+  // Primero la dirección rápida (sin número); la página pide aparte «&numero=1», que puede tardar unos segundos.
+  const conNumero = p.get("numero") === "1";
+  const d = await direccionDe(lat, lng, { conNumero });
   return d ? NextResponse.json(d) : NextResponse.json({ error: "No pudimos leer la dirección. Escríbela a mano." }, { status: 404 });
 }
