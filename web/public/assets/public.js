@@ -177,6 +177,7 @@
       const m = RR.openModal(`<div class="modal-head"><div class="grow"><h2>${RR.esc(titulo)}</h2><p class="small muted" style="margin-top:4px">Si el punto no quedó bien, arrastra el pin o toca el mapa. También puedes escribir la dirección.</p></div><button class="btn btn-ghost btn-icon" data-close aria-label="Cerrar">${I.x}</button></div>
         <div class="modal-body stack">
           <button type="button" class="btn" id="uGps">${I.pin}Usar mi ubicación actual</button>
+          <div class="callout warn hidden" id="uAviso"></div>
           <div class="ubic-mapa" id="uMapa"><span class="muted small">Cargando mapa…</span></div>
           <div class="field"><label for="uDir">Dirección</label>
             <div class="row" style="gap:8px"><input class="input grow" id="uDir" maxlength="300" placeholder="Ej.: Calle 5 # 38-20, San Fernando" value="${RR.esc((previa && previa.direccion) || "")}"><button type="button" class="btn" id="uBuscar">${I.search}Buscar</button></div>
@@ -220,7 +221,23 @@
         estado(`Falta el número de la casa: escríbelo después de «${via}» (ej.: # 3-45).`, true);
         if (i >= 0) { dir.focus(); const fin = i + via.length; dir.setSelectionRange(fin, fin); }
       }
-      function ponerPunto(lat, lng, { leer = true, centrar = true } = {}) {
+      let circulo = null;
+      function quitarAviso() {
+        if (circulo) { circulo.remove(); circulo = null; }
+        const a = $m("#uAviso"); if (a) a.classList.add("hidden");
+      }
+      function avisoAproximada(lat, lng, accuracy) {
+        const m = Math.round(accuracy), km = m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`;
+        const a = $m("#uAviso");
+        a.innerHTML = `${I.alert}<span><b>Ubicación aproximada (±${km}).</b> ${/Mobi|Android|iPhone/i.test(navigator.userAgent) ? "Activa el GPS o la ubicación precisa del celular, o" : "Los computadores no tienen GPS:"} arrastra el pin hasta tu casa (o toca el mapa en el lugar exacto) y revisa la dirección.</span>`;
+        a.classList.remove("hidden");
+        if (mapa && window.L) {
+          circulo = window.L.circle([lat, lng], { radius: Math.min(accuracy, 5000), color: "#e3ab12", weight: 2, fillOpacity: 0.12 }).addTo(mapa);
+          mapa.fitBounds(circulo.getBounds(), { maxZoom: 17, padding: [10, 10] });
+        }
+      }
+      function ponerPunto(lat, lng, { leer = true, centrar = true, manual = false } = {}) {
+        if (manual) quitarAviso();
         punto = { lat, lng };
         if (mapa) { pin.setLatLng([lat, lng]); pin.setOpacity(1); if (centrar) mapa.setView([lat, lng], Math.max(mapa.getZoom(), 16)); }
         if (leer) { editadaAMano = false; leerDireccion(); }
@@ -232,8 +249,8 @@
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(mapa);
         const icono = L.divIcon({ className: "ubic-pin", html: I.pin, iconSize: [36, 36], iconAnchor: [18, 34] });
         pin = L.marker(punto ? [punto.lat, punto.lng] : CALI, { draggable: true, icon: icono, opacity: punto ? 1 : 0.55 }).addTo(mapa);
-        pin.on("dragend", () => { const p = pin.getLatLng(); ponerPunto(p.lat, p.lng, { centrar: false }); });
-        mapa.on("click", (e) => ponerPunto(e.latlng.lat, e.latlng.lng, { centrar: false }));
+        pin.on("dragend", () => { const p = pin.getLatLng(); ponerPunto(p.lat, p.lng, { centrar: false, manual: true }); });
+        mapa.on("click", (e) => ponerPunto(e.latlng.lat, e.latlng.lng, { centrar: false, manual: true }));
         setTimeout(() => mapa.invalidateSize(), 60);
       }).catch((e) => { $m("#uMapa").innerHTML = `<span class="muted small">${RR.esc(e.message)}. Escribe la dirección abajo.</span>`; });
 
@@ -242,8 +259,11 @@
         const b = $m("#uGps"); b.disabled = true; estado("Pidiendo tu ubicación al navegador…");
         navigator.geolocation.getCurrentPosition((p) => {
           b.disabled = false;
-          ponerPunto(p.coords.latitude, p.coords.longitude);
-          if (p.coords.accuracy > 150) setTimeout(() => estado(`Ubicación aproximada (±${Math.round(p.coords.accuracy)} m): revisa el pin y la dirección.`), 1500);
+          const { latitude: lat, longitude: lng, accuracy } = p.coords;
+          ponerPunto(lat, lng, { centrar: accuracy <= 60 });
+          // Computadores (sin GPS) dan la ubicación por wifi o IP: puede fallar por cientos de metros.
+          // Se dibuja el margen de error y se pide mover el pin hasta la casa.
+          if (accuracy > 60) avisoAproximada(lat, lng, accuracy);
         }, (err) => {
           b.disabled = false;
           estado(err.code === 1 ? "No diste permiso para ver tu ubicación. Mueve el pin en el mapa o escribe la dirección." : "No pudimos obtener tu ubicación. Mueve el pin o escribe la dirección.", true);

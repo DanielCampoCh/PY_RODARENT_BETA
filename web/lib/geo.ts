@@ -1,3 +1,4 @@
+import { db } from "./db";
 /**
  * Ubicaciones: convertir coordenadas en dirección (y al revés) con OpenStreetMap (Nominatim).
  * Nominatim es gratis con dos condiciones: identificarse con un User-Agent propio y no pasar de ~1 consulta por segundo.
@@ -160,11 +161,36 @@ export async function numeroEstimado(lat: number, lng: number, via: string): Pro
 
 /* ---------- Google Maps (opcional): direcciones exactas si se configura GOOGLE_MAPS_API_KEY ---------- */
 const claveGoogle = () => process.env.GOOGLE_MAPS_API_KEY?.trim() || "";
+/**
+ * Tope de consultas a Google por día (hora de Colombia). Al llegar al tope se usa el mapa gratuito hasta el día siguiente.
+ * 300/día × 31 días ≈ 9.300 al mes: queda por debajo del cupo gratis mensual de Google.
+ * El conteo se guarda en la base (tabla configuracion) para que no se reinicie cuando Render reinicia el servidor.
+ */
+const LIMITE_DIA = () => Math.max(0, Number(process.env.GOOGLE_MAPS_LIMITE_DIA) || 300);
+let topeAvisado = "";
+async function cupoGoogle(): Promise<boolean> {
+  const dia = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bogota" }).format(new Date());
+  try {
+    const [r] = await db()`insert into configuracion (clave, valor) values ('google_maps_uso', ${db().json({ dia, n: 1 })})
+      on conflict (clave) do update set valor = case when configuracion.valor->>'dia' = ${dia}
+        then jsonb_build_object('dia', ${dia}::text, 'n', (configuracion.valor->>'n')::int + 1)
+        else jsonb_build_object('dia', ${dia}::text, 'n', 1) end
+      returning (valor->>'n')::int as n`;
+    if (r.n <= LIMITE_DIA()) return true;
+    if (topeAvisado !== dia) { topeAvisado = dia; console.warn(`[geo] Tope diario de Google Maps alcanzado (${LIMITE_DIA()}): hasta mañana se usa el mapa gratuito.`); }
+    return false;
+  } catch (e) {
+    // Si no se puede contar, no se arriesga: no se usa Google.
+    console.error("[geo] No se pudo contar el uso de Google:", e instanceof Error ? e.message : e);
+    return false;
+  }
+}
 async function google(params: string): Promise<{ formatted_address: string; geometry: { location: { lat: number; lng: number } }; address_components: { long_name: string; types: string[] }[]; types: string[] }[] | null> {
   if (!claveGoogle()) return null;
   const url = `https://maps.googleapis.com/maps/api/geocode/json?language=es&region=co&${params}&key=${claveGoogle()}`;
   const key = url.replace(claveGoogle(), "");
   if (cache.has(key)) return cache.get(key) as never;
+  if (!(await cupoGoogle())) return null;
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(6000) });
     const j = await r.json();
